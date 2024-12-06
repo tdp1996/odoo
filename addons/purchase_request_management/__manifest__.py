@@ -16,7 +16,7 @@
     # Categories can be used to filter modules in modules listing
     # Check https://github.com/odoo/odoo/blob/16.0/odoo/addons/base/data/ir_module_category_data.xml
     # for the full list
-    'category': 'Uncategorized',
+    'category': 'Sales/Purchase Request Management',
     'version': '0.1',
 
     # any module necessary for this one to work correctly
@@ -28,9 +28,13 @@
 
     # always loaded
     'data': [
-        # 'security/ir.model.access.csv',
-        'views/views.xml',
-        'views/templates.xml',
+        'security/purchase_request_security.xml',
+        'security/ir.model.access.csv',
+        'data/purchase_request_demo.xml',
+        'views/purchase_request_line_views.xml',
+        'views/purchase_request_views.xml',
+        'views/purchase_request_menus.xml',
+        # 'views/templates.xml',
     ],
     # only loaded in demonstration mode
     'demo': [

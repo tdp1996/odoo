@@ -67,7 +67,7 @@ class PurchaseRequest(models.Model):
     @api.depends('request_line_ids.total')
     def _compute_total_amount(self):
         for record in self:
-            record.total = sum(line.total for line in record.request_line_ids)
+            record.total_amount = sum(line.total for line in record.request_line_ids)
 
 
 
