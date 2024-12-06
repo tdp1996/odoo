@@ -25,7 +25,7 @@
         <field name="request_id" ref="user_demo"/>      
         <field name="approver_id" ref="user_admin"/>     
         <field name="date_request">2024-12-05</field>
-        <field name="state">draft</field>
+        <field name="state">wait</field>
         <field name="description">Demo Purchase Request 1</field>
     </record>
 </odoo>

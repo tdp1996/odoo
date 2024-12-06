@@ -7,6 +7,8 @@ class PurchaseRequest(models.Model):
     _name = 'purchase.request'
     _description = 'Purchase Request'
 
+    name = fields.Char('Purchase Reference', readonly=True, required=True, copy=False, default='New')
+
     department_id = fields.Many2one(
         comodel_name='hr.department',
         string="Department",
@@ -69,6 +71,11 @@ class PurchaseRequest(models.Model):
         for record in self:
             record.total_amount = sum(line.total for line in record.request_line_ids)
 
+    @api.model
+    def create(self, vals):
+        if vals.get('name', 'New') == 'New':
+            vals['name'] = self.env['ir.sequence'].next_by_code('purchase.request')
+            return super(PurchaseRequest, self).create(vals)
 
 
 

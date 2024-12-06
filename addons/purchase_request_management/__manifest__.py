@@ -31,6 +31,7 @@
         'security/purchase_request_security.xml',
         'security/ir.model.access.csv',
         'data/purchase_request_demo.xml',
+        'data/purchase_request_data.xml',
         'views/purchase_request_line_views.xml',
         'views/purchase_request_views.xml',
         'views/purchase_request_menus.xml',
