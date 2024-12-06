@@ -1,231 +1,286 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
+import logging
+import time
 
-from odoo import api, fields, models, _
-from odoo.tools.float_utils import float_compare
+from odoo import api, fields, models, Command, _
+
+_logger = logging.getLogger(__name__)
+
+TOLERANCE = 0.02  # tolerance applied to the total when searching for a matching purchase order
 
 
-class AccountInvoice(models.Model):
-    _inherit = 'account.invoice'
+class AccountMove(models.Model):
+    _inherit = 'account.move'
 
-    purchase_id = fields.Many2one('purchase.order', string='Add Purchase Order',
-        help='Encoding help. When selected, the associated purchase order lines are added to the vendor bill. Several PO can be selected.')
+    purchase_vendor_bill_id = fields.Many2one('purchase.bill.union', store=False, readonly=True,
+        states={'draft': [('readonly', False)]},
+        string='Auto-complete',
+        help="Auto-complete from a past bill / purchase order.")
+    purchase_id = fields.Many2one('purchase.order', store=False, readonly=True,
+        states={'draft': [('readonly', False)]},
+        string='Purchase Order',
+        help="Auto-complete from a past purchase order.")
+    purchase_order_count = fields.Integer(compute="_compute_origin_po_count", string='Purchase Order Count')
 
-    @api.onchange('state', 'partner_id', 'invoice_line_ids')
-    def _onchange_allowed_purchase_ids(self):
+    def _get_invoice_reference(self):
+        self.ensure_one()
+        vendor_refs = [ref for ref in set(self.invoice_line_ids.mapped('purchase_line_id.order_id.partner_ref')) if ref]
+        if self.ref:
+            return [ref for ref in self.ref.split(', ') if ref and ref not in vendor_refs] + vendor_refs
+        return vendor_refs
+
+    @api.onchange('purchase_vendor_bill_id', 'purchase_id')
+    def _onchange_purchase_auto_complete(self):
+        r''' Load from either an old purchase order, either an old vendor bill.
+
+        When setting a 'purchase.bill.union' in 'purchase_vendor_bill_id':
+        * If it's a vendor bill, 'invoice_vendor_bill_id' is set and the loading is done by '_onchange_invoice_vendor_bill'.
+        * If it's a purchase order, 'purchase_id' is set and this method will load lines.
+
+        /!\ All this not-stored fields must be empty at the end of this function.
         '''
-        The purpose of the method is to define a domain for the available
-        purchase orders.
-        '''
-        result = {}
+        if self.purchase_vendor_bill_id.vendor_bill_id:
+            self.invoice_vendor_bill_id = self.purchase_vendor_bill_id.vendor_bill_id
+            self._onchange_invoice_vendor_bill()
+        elif self.purchase_vendor_bill_id.purchase_order_id:
+            self.purchase_id = self.purchase_vendor_bill_id.purchase_order_id
+        self.purchase_vendor_bill_id = False
 
-        # A PO can be selected only if at least one PO line is not already in the invoice
-        purchase_line_ids = self.invoice_line_ids.mapped('purchase_line_id')
-        purchase_ids = self.invoice_line_ids.mapped('purchase_id').filtered(lambda r: r.order_line <= purchase_line_ids)
-
-        result['domain'] = {'purchase_id': [
-            ('invoice_status', '=', 'to invoice'),
-            ('partner_id', 'child_of', self.partner_id.id),
-            ('id', 'not in', purchase_ids.ids),
-            ]}
-        return result
-
-    def _prepare_invoice_line_from_po_line(self, line):
-        if line.product_id.purchase_method == 'purchase':
-            qty = line.product_qty - line.qty_invoiced
-        else:
-            qty = line.qty_received - line.qty_invoiced
-        if float_compare(qty, 0.0, precision_rounding=line.product_uom.rounding) <= 0:
-            qty = 0.0
-        taxes = line.taxes_id
-        invoice_line_tax_ids = line.order_id.fiscal_position_id.map_tax(taxes)
-        invoice_line = self.env['account.invoice.line']
-        data = {
-            'purchase_line_id': line.id,
-            'name': line.order_id.name+': '+line.name,
-            'origin': line.order_id.origin,
-            'uom_id': line.product_uom.id,
-            'product_id': line.product_id.id,
-            'account_id': invoice_line.with_context({'journal_id': self.journal_id.id, 'type': 'in_invoice'})._default_account(),
-            'price_unit': line.order_id.currency_id.with_context(date=self.date_invoice).compute(line.price_unit, self.currency_id, round=False),
-            'quantity': qty,
-            'discount': 0.0,
-            'account_analytic_id': line.account_analytic_id.id,
-            'analytic_tag_ids': line.analytic_tag_ids.ids,
-            'invoice_line_tax_ids': invoice_line_tax_ids.ids
-        }
-        account = invoice_line.get_invoice_line_account('in_invoice', line.product_id, line.order_id.fiscal_position_id, self.env.user.company_id)
-        if account:
-            data['account_id'] = account.id
-        return data
-
-    def _onchange_product_id(self):
-        domain = super(AccountInvoice, self)._onchange_product_id()
-        if self.purchase_id:
-            # Use the purchase uom by default
-            self.uom_id = self.product_id.uom_po_id
-        return domain
-
-    # Load all unsold PO lines
-    @api.onchange('purchase_id')
-    def purchase_order_change(self):
         if not self.purchase_id:
-            return {}
-        if not self.partner_id:
-            self.partner_id = self.purchase_id.partner_id.id
+            return
 
-        new_lines = self.env['account.invoice.line']
-        for line in self.purchase_id.order_line - self.invoice_line_ids.mapped('purchase_line_id'):
-            data = self._prepare_invoice_line_from_po_line(line)
-            new_line = new_lines.new(data)
-            new_line._set_additional_fields(self)
-            new_lines += new_line
+        # Copy data from PO
+        invoice_vals = self.purchase_id.with_company(self.purchase_id.company_id)._prepare_invoice()
+        has_invoice_lines = bool(self.invoice_line_ids.filtered(lambda x: x.display_type not in ('line_note', 'line_section')))
+        new_currency_id = self.currency_id if has_invoice_lines else invoice_vals.get('currency_id')
+        del invoice_vals['ref'], invoice_vals['payment_reference']
+        del invoice_vals['company_id']  # avoid recomputing the currency
+        if self.move_type == invoice_vals['move_type']:
+            del invoice_vals['move_type'] # no need to be updated if it's same value, to avoid recomputes
+        self.update(invoice_vals)
+        self.currency_id = new_currency_id
 
-        self.invoice_line_ids += new_lines
-        self.payment_term_id = self.purchase_id.payment_term_id
-        self.env.context = dict(self.env.context, from_purchase_order_change=True)
+        # Copy purchase lines.
+        po_lines = self.purchase_id.order_line - self.invoice_line_ids.mapped('purchase_line_id')
+        for line in po_lines.filtered(lambda l: not l.display_type):
+            self.invoice_line_ids += self.env['account.move.line'].new(
+                line._prepare_account_move_line(self)
+            )
+
+        # Compute invoice_origin.
+        origins = set(self.invoice_line_ids.mapped('purchase_line_id.order_id.name'))
+        self.invoice_origin = ','.join(list(origins))
+
+        # Compute ref.
+        refs = self._get_invoice_reference()
+        self.ref = ', '.join(refs)
+
+        # Compute payment_reference.
+        if not self.payment_reference:
+            if len(refs) == 1:
+                self.payment_reference = refs[0]
+            elif len(refs) > 1:
+                self.payment_reference = refs[-1]
+
         self.purchase_id = False
-        return {}
-
-    @api.onchange('currency_id')
-    def _onchange_currency_id(self):
-        if self.currency_id:
-            for line in self.invoice_line_ids.filtered(lambda r: r.purchase_line_id):
-                line.price_unit = line.purchase_id.currency_id.with_context(date=self.date_invoice).compute(line.purchase_line_id.price_unit, self.currency_id, round=False)
-
-    @api.onchange('invoice_line_ids')
-    def _onchange_origin(self):
-        purchase_ids = self.invoice_line_ids.mapped('purchase_id')
-        if purchase_ids:
-            self.origin = ', '.join(purchase_ids.mapped('name'))
 
     @api.onchange('partner_id', 'company_id')
     def _onchange_partner_id(self):
-        payment_term_id = self.env.context.get('from_purchase_order_change') and self.payment_term_id or False
-        res = super(AccountInvoice, self)._onchange_partner_id()
-        if payment_term_id:
-            self.payment_term_id = payment_term_id
-        if not self.env.context.get('default_journal_id') and self.partner_id and self.currency_id and\
-                self.type in ['in_invoice', 'in_refund'] and\
-                self.currency_id != self.partner_id.property_purchase_currency_id:
-            journal_domain = [
-                ('type', '=', 'purchase'),
-                ('company_id', '=', self.company_id.id),
-                ('currency_id', '=', self.partner_id.property_purchase_currency_id.id),
-            ]
-            default_journal_id = self.env['account.journal'].search(journal_domain, limit=1)
-            if default_journal_id:
-                self.journal_id = default_journal_id
+        res = super(AccountMove, self)._onchange_partner_id()
+
+        currency_id = (
+                self.partner_id.property_purchase_currency_id
+                or self.env['res.currency'].browse(self.env.context.get("default_currency_id"))
+                or self.currency_id
+        )
+
+        if self.partner_id and self.move_type in ['in_invoice', 'in_refund'] and self.currency_id != currency_id:
+            if not self.env.context.get('default_journal_id'):
+                journal_domain = [
+                    ('type', '=', 'purchase'),
+                    ('company_id', '=', self.company_id.id),
+                    ('currency_id', '=', currency_id.id),
+                ]
+                default_journal_id = self.env['account.journal'].search(journal_domain, limit=1)
+                if default_journal_id:
+                    self.journal_id = default_journal_id
+
+            self.currency_id = currency_id
+
         return res
 
-    @api.model
-    def invoice_line_move_line_get(self):
-        res = super(AccountInvoice, self).invoice_line_move_line_get()
+    @api.depends('line_ids.purchase_line_id')
+    def _compute_origin_po_count(self):
+        for move in self:
+            move.purchase_order_count = len(move.line_ids.purchase_line_id.order_id)
 
-        if self.env.user.company_id.anglo_saxon_accounting:
-            if self.type in ['in_invoice', 'in_refund']:
-                for i_line in self.invoice_line_ids:
-                    res.extend(self._anglo_saxon_purchase_move_lines(i_line, res))
-        return res
-
-    @api.model
-    def _anglo_saxon_purchase_move_lines(self, i_line, res):
-        """Return the additional move lines for purchase invoices and refunds.
-
-        i_line: An account.invoice.line object.
-        res: The move line entries produced so far by the parent move_line_get.
-        """
-        inv = i_line.invoice_id
-        company_currency = inv.company_id.currency_id
-        if i_line.product_id and i_line.product_id.valuation == 'real_time' and i_line.product_id.type == 'product':
-            # get the fiscal position
-            fpos = i_line.invoice_id.fiscal_position_id
-            # get the price difference account at the product
-            acc = i_line.product_id.property_account_creditor_price_difference
-            if not acc:
-                # if not found on the product get the price difference account at the category
-                acc = i_line.product_id.categ_id.property_account_creditor_price_difference_categ
-            acc = fpos.map_account(acc).id
-            # reference_account_id is the stock input account
-            reference_account_id = i_line.product_id.product_tmpl_id.get_product_accounts(fiscal_pos=fpos)['stock_input'].id
-            diff_res = []
-            account_prec = inv.company_id.currency_id.decimal_places
-            # calculate and write down the possible price difference between invoice price and product price
-            for line in res:
-                if line.get('invl_id', 0) == i_line.id and reference_account_id == line['account_id']:
-                    valuation_price_unit = i_line.product_id.uom_id._compute_price(i_line.product_id.standard_price, i_line.uom_id)
-                    if i_line.product_id.cost_method != 'standard' and i_line.purchase_line_id:
-                        #for average/fifo/lifo costing method, fetch real cost price from incomming moves
-                        valuation_price_unit = i_line.purchase_line_id.product_uom._compute_price(i_line.purchase_line_id.price_unit, i_line.uom_id)
-                        stock_move_obj = self.env['stock.move']
-                        valuation_stock_move = stock_move_obj.search([('purchase_line_id', '=', i_line.purchase_line_id.id), ('state', '=', 'done')])
-                        if valuation_stock_move:
-                            valuation_price_unit_total = 0
-                            valuation_total_qty = 0
-                            for val_stock_move in valuation_stock_move:
-                                valuation_price_unit_total += val_stock_move.price_unit * val_stock_move.product_qty
-                                valuation_total_qty += val_stock_move.product_qty
-                            valuation_price_unit = valuation_price_unit_total / valuation_total_qty
-                            valuation_price_unit = i_line.product_id.uom_id._compute_price(valuation_price_unit, i_line.uom_id)
-                    if inv.currency_id.id != company_currency.id:
-                            valuation_price_unit = company_currency.with_context(date=inv.date_invoice).compute(valuation_price_unit, inv.currency_id, round=False)
-                    if valuation_price_unit != i_line.price_unit and line['price_unit'] == i_line.price_unit and acc:
-                        # price with discount and without tax included
-                        price_unit = i_line.price_unit * (1 - (i_line.discount or 0.0) / 100.0)
-                        tax_ids = []
-                        if line['tax_ids']:
-                            #line['tax_ids'] is like [(4, tax_id, None), (4, tax_id2, None)...]
-                            taxes = self.env['account.tax'].browse([x[1] for x in line['tax_ids']])
-                            price_unit = taxes.compute_all(price_unit, currency=inv.currency_id, quantity=1.0)['total_excluded']
-                            for tax in taxes:
-                                tax_ids.append((4, tax.id, None))
-                                for child in tax.children_tax_ids:
-                                    if child.type_tax_use != 'none':
-                                        tax_ids.append((4, child.id, None))
-                        price_before = line.get('price', 0.0)
-                        line.update({'price': round(valuation_price_unit * line['quantity'], account_prec)})
-                        diff_res.append({
-                            'type': 'src',
-                            'name': i_line.name[:64],
-                            'price_unit': round(price_unit - valuation_price_unit, account_prec),
-                            'quantity': line['quantity'],
-                            'price': round(price_before - line.get('price', 0.0), account_prec),
-                            'account_id': acc,
-                            'product_id': line['product_id'],
-                            'uom_id': line['uom_id'],
-                            'account_analytic_id': line['account_analytic_id'],
-                            'tax_ids': tax_ids,
-                            })
-            return diff_res
-        return []
-
-    @api.model
-    def create(self, vals):
-        invoice = super(AccountInvoice, self).create(vals)
-        purchase = invoice.invoice_line_ids.mapped('purchase_line_id.order_id')
-        if purchase and not invoice.refund_invoice_id:
-            message = _("This vendor bill has been created from: %s") % (",".join(["<a href=# data-oe-model=purchase.order data-oe-id="+str(order.id)+">"+order.name+"</a>" for order in purchase]))
-            invoice.message_post(body=message)
-        return invoice
-
-    @api.multi
-    def write(self, vals):
-        result = True
-        for invoice in self:
-            purchase_old = invoice.invoice_line_ids.mapped('purchase_line_id.order_id')
-            result = result and super(AccountInvoice, invoice).write(vals)
-            purchase_new = invoice.invoice_line_ids.mapped('purchase_line_id.order_id')
-            #To get all po reference when updating invoice line or adding purchase order reference from vendor bill.
-            purchase = (purchase_old | purchase_new) - (purchase_old & purchase_new)
-            if purchase:
-                message = _("This vendor bill has been modified from: %s") % (",".join(["<a href=# data-oe-model=purchase.order data-oe-id="+str(order.id)+">"+order.name+"</a>" for order in purchase]))
-                invoice.message_post(body=message)
+    def action_view_source_purchase_orders(self):
+        self.ensure_one()
+        source_orders = self.line_ids.purchase_line_id.order_id
+        result = self.env['ir.actions.act_window']._for_xml_id('purchase.purchase_form_action')
+        if len(source_orders) > 1:
+            result['domain'] = [('id', 'in', source_orders.ids)]
+        elif len(source_orders) == 1:
+            result['views'] = [(self.env.ref('purchase.purchase_order_form', False).id, 'form')]
+            result['res_id'] = source_orders.id
+        else:
+            result = {'type': 'ir.actions.act_window_close'}
         return result
 
-class AccountInvoiceLine(models.Model):
-    """ Override AccountInvoice_line to add the link to the purchase order line it is related to"""
-    _inherit = 'account.invoice.line'
+    @api.model_create_multi
+    def create(self, vals_list):
+        # OVERRIDE
+        moves = super(AccountMove, self).create(vals_list)
+        for move in moves:
+            if move.reversed_entry_id:
+                continue
+            purchases = move.line_ids.purchase_line_id.order_id
+            if not purchases:
+                continue
+            refs = [purchase._get_html_link() for purchase in purchases]
+            message = _("This vendor bill has been created from: %s") % ','.join(refs)
+            move.message_post(body=message)
+        return moves
 
-    purchase_line_id = fields.Many2one('purchase.order.line', 'Purchase Order Line', ondelete='set null', index=True, readonly=True)
-    purchase_id = fields.Many2one('purchase.order', related='purchase_line_id.order_id', string='Purchase Order', store=False, readonly=True, related_sudo=False,
-        help='Associated Purchase Order. Filled in automatically when a PO is chosen on the vendor bill.')
+    def write(self, vals):
+        # OVERRIDE
+        old_purchases = [move.mapped('line_ids.purchase_line_id.order_id') for move in self]
+        res = super(AccountMove, self).write(vals)
+        for i, move in enumerate(self):
+            new_purchases = move.mapped('line_ids.purchase_line_id.order_id')
+            if not new_purchases:
+                continue
+            diff_purchases = new_purchases - old_purchases[i]
+            if diff_purchases:
+                refs = [purchase._get_html_link() for purchase in diff_purchases]
+                message = _("This vendor bill has been modified from: %s") % ','.join(refs)
+                move.message_post(body=message)
+        return res
+
+    def find_matching_subset_invoice_lines(self, invoice_lines, goal_total, timeout):
+        """ The problem of finding the subset of `invoice_lines` which sums up to `goal_total` reduces to the 0-1 Knapsack problem.
+        The dynamic programming approach to solve this problem is most of the time slower than this because identical sub-problems don't arise often enough.
+        It returns the list of invoice lines which sums up to `goal_total` or an empty list if multiple or no solutions were found."""
+        def _find_matching_subset_invoice_lines(lines, goal):
+            if time.time() - start_time > timeout:
+                raise TimeoutError
+            solutions = []
+            for i, line in enumerate(lines):
+                if line['amount_to_invoice'] < goal - TOLERANCE:
+                    sub_solutions = _find_matching_subset_invoice_lines(lines[i + 1:], goal - line['amount_to_invoice'])
+                    solutions.extend((line, *solution) for solution in sub_solutions)
+                elif goal - TOLERANCE <= line['amount_to_invoice'] <= goal + TOLERANCE:
+                    solutions.append([line])
+                if len(solutions) > 1:
+                    # More than 1 solution found, we can't know for sure which is the correct one, so we don't return any solution
+                    return []
+            return solutions
+        start_time = time.time()
+        try:
+            subsets = _find_matching_subset_invoice_lines(sorted(invoice_lines, key=lambda line: line['amount_to_invoice'], reverse=True), goal_total)
+            return subsets[0] if subsets else []
+        except TimeoutError:
+            _logger.warning("Timed out during search of a matching subset of invoice lines")
+            return []
+
+    def _set_purchase_orders(self, purchase_orders, force_write=True):
+        with self.env.cr.savepoint():
+            with self._get_edi_creation() as move_form:
+                if force_write and move_form.line_ids:
+                    move_form.invoice_line_ids = [Command.clear()]
+                for purchase_order in purchase_orders:
+                    move_form.invoice_line_ids = [Command.create({
+                        'display_type': 'line_section',
+                        'name': _('From %s document', purchase_order.name)
+                    })]
+                    move_form.purchase_id = purchase_order
+                    move_form._onchange_purchase_auto_complete()
+
+    def _match_purchase_orders(self, po_references, partner_id, amount_total, timeout):
+        """ Tries to match a purchase order given some bill arguments/hints.
+
+        :param po_references: A list of potencial purchase order references/name.
+        :param partner_id: The vendor id.
+        :param amount_total: The vendor bill total.
+        :param timeout: The timeout for subline search
+        :return: A tuple containing:
+            * a str which is the match method:
+                'total_match': the invoice amount AND the partner or bill' reference match
+                'subset_total_match': the reference AND a subset of line that match the bill amount total
+                'po_match': only the reference match
+                'no_match': no result found
+            * recordset of matched 'purchase.order.line' (could come from more than one purchase.order)
+        """
+        common_domain = [('company_id', '=', self.company_id.id), ('state', 'in', ('purchase', 'done')), ('invoice_status', 'in', ('to invoice', 'no'))]
+
+        matching_pos = self.env['purchase.order']
+        if po_references and amount_total:
+            matching_pos |= self.env['purchase.order'].search(common_domain + [('name', 'in', po_references)])
+
+            if not matching_pos:
+                matching_pos |= self.env['purchase.order'].search(common_domain + [('partner_ref', 'in', po_references)])
+
+            if matching_pos:
+                matching_pos_invoice_lines = [{
+                    'line': line,
+                    'amount_to_invoice': (1 - line.qty_invoiced / line.product_qty) * line.price_total,
+                } for line in matching_pos.order_line if line.product_qty]
+
+                if amount_total - TOLERANCE < sum(line['amount_to_invoice'] for line in matching_pos_invoice_lines) < amount_total + TOLERANCE:
+                    return 'total_match', matching_pos.order_line
+
+                else:
+                    il_subset = self.find_matching_subset_invoice_lines(matching_pos_invoice_lines, amount_total, timeout)
+                    if il_subset:
+                        return 'subset_total_match', self.env['purchase.order.line'].union(*[line['line'] for line in il_subset])
+                    else:
+                        return 'po_match', matching_pos.order_line
+
+        if partner_id and amount_total:
+            purchase_id_domain = common_domain + [('partner_id', 'child_of', [partner_id]), ('amount_total', '>=', amount_total - TOLERANCE), ('amount_total', '<=', amount_total + TOLERANCE)]
+            matching_pos |= self.env['purchase.order'].search(purchase_id_domain)
+            if len(matching_pos) == 1:
+                return 'total_match', matching_pos.order_line
+
+        return 'no_match', matching_pos.order_line
+
+    def _find_and_set_purchase_orders(self, po_references, partner_id, amount_total, prefer_purchase_line=False, timeout=10):
+        self.ensure_one()
+
+        method, matched_po_lines = self._match_purchase_orders(po_references, partner_id, amount_total, timeout)
+
+        if method == 'total_match': # erase all lines and autocomplete
+            self._set_purchase_orders(matched_po_lines.order_id, force_write=True)
+
+        elif method == 'subset_total_match': # don't erase and add autocomplete
+            self._set_purchase_orders(matched_po_lines.order_id, force_write=False)
+
+            with self._get_edi_creation() as move_form: # logic for unmatched lines
+                unmatched_lines = move_form.invoice_line_ids.filtered(
+                    lambda l: l.purchase_line_id and l.purchase_line_id not in matched_po_lines)
+                for line in unmatched_lines:
+                    if prefer_purchase_line:
+                        line.quantity = 0
+                    else:
+                        line.unlink()
+
+                if not prefer_purchase_line:
+                    move_form.invoice_line_ids.filtered('purchase_line_id').quantity = 0
+
+        elif method == 'po_match': # erase all lines and autocomplete
+            if prefer_purchase_line:
+                self._set_purchase_orders(matched_po_lines.order_id, force_write=True)
+
+
+class AccountMoveLine(models.Model):
+    """ Override AccountInvoice_line to add the link to the purchase order line it is related to"""
+    _inherit = 'account.move.line'
+
+    purchase_line_id = fields.Many2one('purchase.order.line', 'Purchase Order Line', ondelete='set null', index='btree_not_null')
+    purchase_order_id = fields.Many2one('purchase.order', 'Purchase Order', related='purchase_line_id.order_id', readonly=True)
+
+    def _copy_data_extend_business_fields(self, values):
+        # OVERRIDE to copy the 'purchase_line_id' field as well.
+        super(AccountMoveLine, self)._copy_data_extend_business_fields(values)
+        values['purchase_line_id'] = self.purchase_line_id.id

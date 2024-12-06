@@ -7,7 +7,7 @@
             <field name="arch" type="xml">
                 <form string="Barcode Nomenclature">
                     <sheet>
-                        <group col="4">
+                        <group name="general_attributes" col="4">
                             <field name="name" />
                             <field name="upc_ean_conv"/>
                         </group>
@@ -54,11 +54,10 @@
             <field name="name">Barcode Nomenclatures</field>
             <field name="type">ir.actions.act_window</field>
             <field name="res_model">barcode.nomenclature</field>
-            <field name="view_type">form</field>
-            <field name="view_mode">tree,form</field>
+            <field name="view_mode">tree,kanban,form</field>
             <field name="help" type="html">
-              <p class="oe_view_nocontent_create">
-                Click to add a Barcode Nomenclature .
+              <p class="o_view_nocontent_smiling_face">
+                Add a new barcode nomenclature
               </p><p>
                 A barcode nomenclature defines how the point of sale identify and interprets barcodes
               </p>
@@ -70,7 +69,7 @@
             <field name="model">barcode.rule</field>
             <field name="arch" type="xml">
                 <form string="Barcode Rule">
-                    <group col="4">
+                    <group>
                         <field name="name" />
                         <field name="sequence" />
                         <field name="type"/>  

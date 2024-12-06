@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-# Copyright (C) Rooms For (Hong Kong) Limited T/A OSCG
+# Copyright (C) Quartile Limited
 
 {
     'name': 'Japan - Accounting',
-    'version': '2.0',
-    'category': 'Localization',
+    'version': '2.3',
+    'category': 'Accounting/Localizations/Account Charts',
     'description': """
 
 Overview:
@@ -20,22 +20,32 @@ Note:
 -----
 
 * Fiscal positions '内税' and '外税' have been added to handle special \
-requirements which might arise from POS implementation. [1]  You may not \
-need to use these at all under normal circumstances.
+requirements which might arise from POS implementation. [1]  Under normal \
+circumstances, you might not need to use those at all.
 
 [1] See https://github.com/odoo/odoo/pull/6470 for detail.
 
     """,
-    'author': 'Rooms For (Hong Kong) Limited T/A OSCG',
-    'website': 'http://www.openerp-asia.net/',
-    'depends': ['account'],
+    'author': 'Quartile Limited',
+    'website': 'https://www.quartile.co/',
+    'depends': [
+        'account',
+        'l10n_multilang',
+    ],
     'data': [
         'data/l10n_jp_chart_data.xml',
         'data/account.account.template.csv',
-        'data/account.tax.template.csv',
+        'data/account.tax.group.csv',
+        'data/account_tax_report_data.xml',
+        'data/account_tax_template_data.xml',
         'data/account_chart_template_data.xml',
         'data/account.fiscal.position.template.csv',
-        'data/account.fiscal.position.tax.template.csv',
-        'data/account_chart_template_data.yml',
+        'data/account_fiscal_position_tax_template_data.xml',
+        'data/account_chart_template_configure_data.xml',
     ],
+    'demo': [
+        'demo/demo_company.xml',
+    ],
+    'post_init_hook': 'load_translations',
+    'license': 'LGPL-3',
 }

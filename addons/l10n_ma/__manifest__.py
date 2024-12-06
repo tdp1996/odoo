@@ -4,12 +4,12 @@
 # Copyright (c) 2010 kazacube (http://kazacube.com).
 
 {
-    'name': 'Maroc - Accounting',
+    'name': 'Morocco - Accounting',
     'author': 'kazacube',
-    'category': 'Localization',
+    'category': 'Accounting/Localizations/Account Charts',
     'description': """
-This is the base module to manage the accounting chart for Maroc.
-=================================================================
+This is the base module to manage the accounting chart for Morocco.
+====================================================================
 
 Ce Module charge le modèle du plan de comptes standard Marocain et permet de
 générer les états comptables aux normes marocaines (Bilan, CPC (comptes de
@@ -20,7 +20,10 @@ Seddik au cours du troisième trimestre 2010.""",
     'depends': ['base', 'account'],
     'data': [
         'data/l10n_ma_chart_data.xml',
+        'data/account_tax_group_data.xml',
+        'data/account_tax_report_data.xml',
         'data/account_tax_data.xml',
-        'data/account_chart_template_data.yml',
+        'data/account_chart_template_data.xml',
     ],
+    'license': 'LGPL-3',
 }

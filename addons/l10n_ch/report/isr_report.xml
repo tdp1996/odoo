@@ -16,35 +16,23 @@
         </record>
 
         <!--Report containing an ISR corrresponding to an invoice.-->
-        <report id="l10n_ch_isr_report"
-            model="account.invoice"
-            report_type="qweb-pdf"
-            string="ISR"
-            name="l10n_ch.isr_report_main"
-            file="l10n_ch.isr_report_main"
-            attachment_use="True"
-            attachment="'ISR-' + object.number + '.pdf'"
-            menu="False"
-            />
-
-        <record id="l10n_ch_isr_report" model ="ir.actions.report.xml">
-            <field name="print_report_name">
-                'ISR-' + object.number
-                <!--No additional condition on invoice state or type as this
-                report is only available to be printed for out invoices after
-                'draft' state, if the fields required by the ISR have been set.-->
-            </field>
+        <record id="l10n_ch_isr_report" model="ir.actions.report">
+            <field name="name">ISR</field>
+            <field name="model">account.move</field>
+            <field name="report_type">qweb-pdf</field>
+            <field name="report_name">l10n_ch.isr_report_main</field>
+            <field name="report_file">l10n_ch.isr_report_main</field>
+            <field name="print_report_name">'ISR-%s' % object.name</field>
             <field name="paperformat_id" ref="paperformat_euro_no_margin"/>
+            <field name="attachment">'ISR-' + object.name + '.pdf'</field>
+            <field name="attachment_use">True</field>
         </record>
-
-        <template id="assets_common" name="l10n_ch_isr_report" inherit_id="report.assets_common">
-            <xpath expr="." position="inside">
-                <link href="/l10n_ch/static/src/less/report_isr.less" rel="stylesheet"/>
-            </xpath>
-        </template>
+        <!--No additional condition in report name on invoice state or type as this
+            report is only available to be printed for out invoices after
+            'draft' state, if the fields required by the ISR have been set.-->
 
         <template id="l10n_ch_isr_report_template">
-            <t t-call="report.external_layout">
+            <t t-call="web.external_layout">
                 <t t-set="split_total_amount" t-value="invoice.split_total_amount()"/>
                 <t t-set="print_bank" t-value="invoice.company_id.l10n_ch_isr_print_bank_location"/>
 
@@ -54,7 +42,7 @@
                 <!-- since the body content take the whole page we need a way to add margin
                      back on content outside the ISR so it does not overlap with the header -->
                 <div id="content_outside_isr">
-                    <h1>ISR for invoice <t t-esc="invoice.number"/></h1>
+                    <h1>ISR for invoice <t t-esc="invoice.name"/></h1>
                 </div>
 
                 <div id="isr" t-att-class="'isr-print-bank' if print_bank else None">
@@ -67,7 +55,7 @@
                         and location of the bank.-->
                         <t t-if="print_bank">
                             <div id="voucher-for-bank">
-                                <p>
+                                <p t-if="not invoice.company_id.l10n_ch_isr_preprinted_bank">
                                     <t t-esc="invoice.partner_bank_id.bank_id.name"/><br />
                                     <t t-esc="invoice.partner_bank_id.bank_id.zip"/>
                                     <t t-esc="invoice.partner_bank_id.bank_id.city"/>
@@ -85,12 +73,11 @@
                             </p>
                         </div>
 
-                        <div id="voucher-bank">
+                        <div id="voucher-bank" t-if="not print_bank or not invoice.company_id.l10n_ch_isr_preprinted_account">
                             <!--Konto/Compte/Conto-->
-                            <p id="voucher-bank_ref" t-field="invoice.l10n_ch_isr_postal_formatted"/>
+                            <p id="voucher-bank_ref" t-field="invoice.l10n_ch_isr_subscription_formatted"/>
                         </div>
 
-                        <p id="voucher-currency" t-field="invoice.currency_id.name"/>
                         <p id="voucher-amount_units" t-esc="split_total_amount[0]"/>
                         <p id="voucher-amount_cents" t-esc="split_total_amount[1]"/>
 
@@ -109,7 +96,7 @@
                         and location of the bank.-->
                         <t t-if="print_bank">
                             <div id="slip-for-bank">
-                                <p>
+                                <p t-if="not invoice.company_id.l10n_ch_isr_preprinted_bank">
                                     <t t-esc="invoice.partner_bank_id.bank_id.name"/><br />
                                     <t t-esc="invoice.partner_bank_id.bank_id.zip"/>
                                     <t t-esc="invoice.partner_bank_id.bank_id.city"/>
@@ -128,12 +115,12 @@
                             </p>
                         </div>
 
-                        <div id="slip-bank">
+                        <div id="slip-bank" t-if="not print_bank or not invoice.company_id.l10n_ch_isr_preprinted_account">
                             <!--Konto/Compte/Conto-->
-                            <p id="slip-bank_ref" t-field="invoice.l10n_ch_isr_postal_formatted"/>
+                            <!--aka ISR Subscriber number provided by the financial institution-->
+                            <p id="slip-bank_ref" t-field="invoice.l10n_ch_isr_subscription_formatted"/>
                         </div>
 
-                        <p id="slip-currency" t-field="invoice.currency_id.name"/>
                         <p id="slip-amount_units" t-esc="split_total_amount[0]"/>
                         <p id="slip-amount_cents" t-esc="split_total_amount[1]"/>
 
@@ -147,9 +134,11 @@
                             <address id="slip-by_customer_address" t-field="invoice.partner_id" t-options='{"widget": "contact", "fields": ["address","name"], "no_marker": True}' />
                         </div>
 
-                        <div id="slip-optical">
+                        <div id="slip-optical-line">
                             <!--Optical reference-->
-                            <span id="slip-optical_ref_line" t-field="invoice.l10n_ch_isr_optical_line"/>
+                            <div t-attf-style="top: {{ invoice.company_id.l10n_ch_isr_scan_line_top }}mm; left: {{ invoice.company_id.l10n_ch_isr_scan_line_left }}mm;">
+                                <div t-foreach="invoice.l10n_ch_isr_optical_line" t-as="char" t-esc="char" t-attf-style="right: {{ round((char_size - char_index - 1) * 0.1, 1) }}in"/>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -157,8 +146,9 @@
         </template>
 
         <template id="l10n_ch.isr_report_main">
-            <t t-call="report.html_container">
+            <t t-call="web.html_container">
                 <t t-foreach="docs" t-as="invoice">
+                    <t t-set="o" t-value="invoice"/>
                     <t t-call="l10n_ch.l10n_ch_isr_report_template"/>
                 </t>
             </t>

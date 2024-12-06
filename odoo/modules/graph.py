@@ -9,7 +9,6 @@ import logging
 import odoo
 import odoo.tools as tools
 
-
 _logger = logging.getLogger(__name__)
 
 class Graph(dict):
@@ -36,7 +35,7 @@ class Graph(dict):
             return
         # update the graph with values from the database (if exist)
         ## First, we set the default values for each package in graph
-        additional_data = dict((key, {'id': 0, 'state': 'uninstalled', 'dbdemo': False, 'installed_version': None}) for key in self.keys())
+        additional_data = {key: {'id': 0, 'state': 'uninstalled', 'dbdemo': False, 'installed_version': None} for key in self.keys()}
         ## Then we get the values from the database
         cr.execute('SELECT name, id, state, demo AS dbdemo, latest_version AS installed_version'
                    '  FROM ir_module_module'
@@ -59,10 +58,7 @@ class Graph(dict):
         packages = []
         len_graph = len(self)
         for module in module_list:
-            # This will raise an exception if no/unreadable descriptor file.
-            # NOTE The call to load_information_from_description_file is already
-            # done by db.initialize, so it is possible to not do it again here.
-            info = odoo.modules.module.load_information_from_description_file(module)
+            info = odoo.modules.module.get_manifest(module)
             if info and info['installable']:
                 packages.append((module, info)) # TODO directly a dict, like in get_modules_with_version
             elif module != 'studio_customization':
@@ -94,8 +90,8 @@ class Graph(dict):
         self.update_from_db(cr)
 
         for package in later:
-            unmet_deps = filter(lambda p: p not in self, dependencies[package])
-            _logger.error('module %s: Unmet dependencies: %s', package, ', '.join(unmet_deps))
+            unmet_deps = [p for p in dependencies[package] if p not in self]
+            _logger.info('module %s: Unmet dependencies: %s', package, ', '.join(unmet_deps))
 
         return len(self) - len_graph
 
@@ -118,7 +114,7 @@ class Node(object):
 
     Node acts as a per-module singleton. A node is constructed via
     Graph.add_module() or Graph.add_modules(). Some of its fields are from
-    ir_module_module (setted by Graph.update_from_db()).
+    ir_module_module (set by Graph.update_from_db()).
 
     """
     def __new__(cls, name, graph, info):
@@ -164,7 +160,10 @@ class Node(object):
                 setattr(child, name, value + 1)
 
     def __iter__(self):
-        return itertools.chain(iter(self.children), *map(iter, self.children))
+        return itertools.chain(
+            self.children,
+            itertools.chain.from_iterable(self.children)
+        )
 
     def __str__(self):
         return self._pprint()
@@ -174,3 +173,17 @@ class Node(object):
         for c in self.children:
             s += '%s`-> %s' % ('   ' * depth, c._pprint(depth+1))
         return s
+
+    def should_have_demo(self):
+        return (hasattr(self, 'demo') or (self.dbdemo and self.state != 'installed')) and all(p.dbdemo for p in self.parents)
+
+    @property
+    def parents(self):
+        if self.depth == 0:
+            return []
+
+        return (
+            node for node in self.graph.values()
+            if node.depth < self.depth
+            if self in node.children
+        )

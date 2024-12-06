@@ -1,0 +1,31 @@
+<odoo>
+
+    <record id="department_it" model="hr.department">
+        <field name="name">IT</field>
+    </record>
+    <record id="department_marketing" model="hr.department">
+        <field name="name">Marketing</field>
+    </record>
+
+
+    <record id="user_demo" model="res.users">
+        <field name="name">Demo User</field>
+        <field name="login">demo_user</field>
+        <field name="groups_id" eval="[(6, 0, [ref('base.group_user')])]"/>
+    </record>
+    <record id="user_admin" model="res.users">
+        <field name="name">Admin User</field>
+        <field name="login">admin_user</field>
+        <field name="groups_id" eval="[(6, 0, [ref('base.group_user')])]"/>
+    </record>
+
+
+    <record id="purchase_request_1" model="purchase.request">
+        <field name="department_id" ref="department_it"/> 
+        <field name="request_id" ref="user_demo"/>      
+        <field name="approver_id" ref="user_admin"/>     
+        <field name="date_request">2024-12-05</field>
+        <field name="state">draft</field>
+        <field name="description">Demo Purchase Request 1</field>
+    </record>
+</odoo>

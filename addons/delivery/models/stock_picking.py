@@ -1,37 +1,230 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import json
+from collections import defaultdict
+
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
-
-import odoo.addons.decimal_precision as dp
+from odoo.tools.sql import column_exists, create_column
 
 
 class StockQuantPackage(models.Model):
     _inherit = "stock.quant.package"
 
-    @api.one
-    @api.depends('quant_ids', 'children_ids')
+    @api.depends('quant_ids', 'package_type_id')
     def _compute_weight(self):
-        weight = 0
-        for quant in self.quant_ids:
-            weight += quant.qty * quant.product_id.weight
-        for pack in self.children_ids:
-            pack._compute_weight()
-            weight += pack.weight
-        self.weight = weight
+        if self.env.context.get('picking_id'):
+            package_weights = defaultdict(float)
+            # Ordering by qty_done prevents the default ordering by groupby fields that can inject multiple Left Joins in the resulting query.
+            res_groups = self.env['stock.move.line'].read_group(
+                [('result_package_id', 'in', self.ids), ('product_id', '!=', False), ('picking_id', '=', self.env.context['picking_id'])],
+                ['id:count'],
+                ['result_package_id', 'product_id', 'product_uom_id', 'qty_done'],
+                lazy=False, orderby='qty_done asc'
+            )
+            for res_group in res_groups:
+                product_id = self.env['product.product'].browse(res_group['product_id'][0])
+                product_uom_id = self.env['uom.uom'].browse(res_group['product_uom_id'][0])
+                package_weights[res_group['result_package_id'][0]] += (
+                    res_group['__count']
+                    * product_uom_id._compute_quantity(res_group['qty_done'], product_id.uom_id)
+                    * product_id.weight
+                )
+        for package in self:
+            weight = package.package_type_id.base_weight or 0.0
+            if self.env.context.get('picking_id'):
+                package.weight = weight + package_weights[package.id]
+            else:
+                for quant in package.quant_ids:
+                    weight += quant.quantity * quant.product_id.weight
+                package.weight = weight
 
-    weight = fields.Float(compute='_compute_weight')
-    shipping_weight = fields.Float(string='Shipping Weight', help="Can be changed during the 'put in pack' to adjust the weight of the shipping.")
+    def _get_default_weight_uom(self):
+        return self.env['product.template']._get_weight_uom_name_from_ir_config_parameter()
+
+    def _compute_weight_uom_name(self):
+        for package in self:
+            package.weight_uom_name = self.env['product.template']._get_weight_uom_name_from_ir_config_parameter()
+
+    def _compute_weight_is_kg(self):
+        self.weight_is_kg = False
+        uom_id = self.env['product.template']._get_weight_uom_id_from_ir_config_parameter()
+        if uom_id == self.env.ref('uom.product_uom_kgm'):
+            self.weight_is_kg = True
+        self.weight_uom_rounding = uom_id.rounding
+
+    weight = fields.Float(compute='_compute_weight', digits='Stock Weight', help="Total weight of all the products contained in the package.")
+    weight_uom_name = fields.Char(string='Weight unit of measure label', compute='_compute_weight_uom_name', readonly=True, default=_get_default_weight_uom)
+    weight_is_kg = fields.Boolean("Technical field indicating whether weight uom is kg or not (i.e. lb)", compute="_compute_weight_is_kg")
+    weight_uom_rounding = fields.Float("Technical field indicating weight's number of decimal places", compute="_compute_weight_is_kg")
+    shipping_weight = fields.Float(string='Shipping Weight', help="Total weight of the package.")
 
 
-class StockPackOperation(models.Model):
-    _inherit = 'stock.pack.operation'
+class StockPicking(models.Model):
+    _inherit = 'stock.picking'
 
-    @api.multi
-    def manage_package_type(self):
+    def _auto_init(self):
+        if not column_exists(self.env.cr, "stock_picking", "weight"):
+            # In order to speed up module installation when dealing with hefty data
+            # We create the column weight manually, but the computation will be skipped
+            # Therefore we do the computation in a query by getting weight sum from stock moves
+            create_column(self.env.cr, "stock_picking", "weight", "numeric")
+            self.env.cr.execute("""
+                WITH computed_weight AS (
+                    SELECT SUM(weight) AS weight_sum, picking_id
+                    FROM stock_move
+                    WHERE picking_id IS NOT NULL
+                    GROUP BY picking_id
+                )
+                UPDATE stock_picking
+                SET weight = weight_sum
+                FROM computed_weight
+                WHERE stock_picking.id = computed_weight.picking_id;
+            """)
+        return super()._auto_init()
+
+    @api.depends('move_line_ids', 'move_line_ids.result_package_id')
+    def _compute_packages(self):
+        packages = {
+            res["picking_id"][0]: set(res["result_package_id"])
+            for res in self.env["stock.move.line"].read_group(
+                [("picking_id", "in", self.ids), ("result_package_id", "!=", False)],
+                ["result_package_id:array_agg"],
+                ["picking_id"],
+                lazy=False, orderby="picking_id asc",
+            )
+        }
+        for picking in self:
+            picking.package_ids = list(packages.get(picking.id, []))
+
+    @api.depends('move_line_ids', 'move_line_ids.result_package_id', 'move_line_ids.product_uom_id', 'move_line_ids.qty_done')
+    def _compute_bulk_weight(self):
+        picking_weights = defaultdict(float)
+        # Ordering by qty_done prevents the default ordering by groupby fields that can inject multiple Left Joins in the resulting query.
+        res_groups = self.env['stock.move.line'].read_group(
+            [('picking_id', 'in', self.ids), ('product_id', '!=', False), ('result_package_id', '=', False)],
+            ['id:count'],
+            ['picking_id', 'product_id', 'product_uom_id', 'qty_done'],
+            lazy=False, orderby='qty_done asc'
+        )
+        products_by_id = {
+            product_res['id']: (product_res['uom_id'][0], product_res['weight'])
+            for product_res in
+            self.env['product.product'].with_context(active_test=False).search_read(
+                [('id', 'in', list(set(grp["product_id"][0] for grp in res_groups)))], ['uom_id', 'weight'])
+        }
+        for res_group in res_groups:
+            uom_id, weight = products_by_id[res_group['product_id'][0]]
+            uom = self.env['uom.uom'].browse(uom_id)
+            product_uom_id = self.env['uom.uom'].browse(res_group['product_uom_id'][0])
+            picking_weights[res_group['picking_id'][0]] += (
+                res_group['__count']
+                * product_uom_id._compute_quantity(res_group['qty_done'], uom)
+                * weight
+            )
+        for picking in self:
+            picking.weight_bulk = picking_weights[picking.id]
+
+    @api.depends('move_line_ids.result_package_id', 'move_line_ids.result_package_id.shipping_weight', 'weight_bulk')
+    def _compute_shipping_weight(self):
+        for picking in self:
+            # if shipping weight is not assigned => default to calculated product weight
+            picking.shipping_weight = (
+                picking.weight_bulk +
+                sum(pack.shipping_weight or pack.weight for pack in picking.package_ids.sudo())
+            )
+
+    def _get_default_weight_uom(self):
+        return self.env['product.template']._get_weight_uom_name_from_ir_config_parameter()
+
+    def _compute_weight_uom_name(self):
+        for package in self:
+            package.weight_uom_name = self.env['product.template']._get_weight_uom_name_from_ir_config_parameter()
+
+    carrier_price = fields.Float(string="Shipping Cost")
+    delivery_type = fields.Selection(related='carrier_id.delivery_type', readonly=True)
+    carrier_id = fields.Many2one("delivery.carrier", string="Carrier", check_company=True)
+    weight = fields.Float(compute='_cal_weight', digits='Stock Weight', store=True, help="Total weight of the products in the picking.", compute_sudo=True)
+    carrier_tracking_ref = fields.Char(string='Tracking Reference', copy=False)
+    carrier_tracking_url = fields.Char(string='Tracking URL', compute='_compute_carrier_tracking_url')
+    weight_uom_name = fields.Char(string='Weight unit of measure label', compute='_compute_weight_uom_name', readonly=True, default=_get_default_weight_uom)
+    package_ids = fields.Many2many('stock.quant.package', compute='_compute_packages', string='Packages')
+    weight_bulk = fields.Float('Bulk Weight', compute='_compute_bulk_weight', help="Total weight of products which are not in a package.")
+    shipping_weight = fields.Float("Weight for Shipping", compute='_compute_shipping_weight',
+        help="Total weight of packages and products not in a package. Packages with no shipping weight specified will default to their products' total weight. This is the weight used to compute the cost of the shipping.")
+    is_return_picking = fields.Boolean(compute='_compute_return_picking')
+    return_label_ids = fields.One2many('ir.attachment', compute='_compute_return_label')
+    destination_country_code = fields.Char(related='partner_id.country_id.code', string="Destination Country")
+
+    @api.depends('carrier_id', 'carrier_tracking_ref')
+    def _compute_carrier_tracking_url(self):
+        for picking in self:
+            picking.carrier_tracking_url = picking.carrier_id.get_tracking_link(picking) if picking.carrier_id and picking.carrier_tracking_ref else False
+
+    @api.depends('carrier_id', 'move_ids_without_package')
+    def _compute_return_picking(self):
+        for picking in self:
+            if picking.carrier_id and picking.carrier_id.can_generate_return:
+                picking.is_return_picking = any(m.origin_returned_move_id for m in picking.move_ids_without_package)
+            else:
+                picking.is_return_picking = False
+
+    def _compute_return_label(self):
+        for picking in self:
+            if picking.carrier_id:
+                picking.return_label_ids = self.env['ir.attachment'].search([('res_model', '=', 'stock.picking'), ('res_id', '=', picking.id), ('name', 'like', '%s%%' % picking.carrier_id.get_return_label_prefix())])
+            else:
+                picking.return_label_ids = False
+
+    def get_multiple_carrier_tracking(self):
+        self.ensure_one()
+        try:
+            return json.loads(self.carrier_tracking_url)
+        except (ValueError, TypeError):
+            return False
+
+    @api.depends('move_ids.weight')
+    def _cal_weight(self):
+        for picking in self:
+            picking.weight = sum(move.weight for move in picking.move_ids if move.state != 'cancel')
+
+    def _send_confirmation_email(self):
+        for pick in self:
+            if pick.carrier_id and pick.carrier_id.integration_level == 'rate_and_ship' and pick.picking_type_code != 'incoming' and not pick.carrier_tracking_ref and pick.picking_type_id.print_label:
+                pick.sudo().send_to_shipper()
+            pick._check_carrier_details_compliance()
+        return super(StockPicking, self)._send_confirmation_email()
+
+    def _pre_put_in_pack_hook(self, move_line_ids):
+        res = super(StockPicking, self)._pre_put_in_pack_hook(move_line_ids)
+        if not res:
+            if move_line_ids.carrier_id:
+                if len(move_line_ids.carrier_id) > 1 or any(not ml.carrier_id for ml in move_line_ids):
+                    # avoid (duplicate) costs for products
+                    raise UserError(_("You cannot pack products into the same package when they have different carriers (i.e. check that all of their transfers have a carrier assigned and are using the same carrier)."))
+                return self._set_delivery_package_type(batch_pack=len(move_line_ids.picking_id) > 1)
+        else:
+            return res
+
+    def _set_delivery_package_type(self, batch_pack=False):
+        """ This method returns an action allowing to set the package type and the shipping weight
+        on the stock.quant.package.
+        """
         self.ensure_one()
         view_id = self.env.ref('delivery.choose_delivery_package_view_form').id
+        context = dict(
+            self.env.context,
+            current_package_carrier_type=self.carrier_id.delivery_type,
+            default_picking_id=self.id,
+            batch_pack=batch_pack,
+        )
+        # As we pass the `delivery_type` ('fixed' or 'base_on_rule' by default) in a key who
+        # correspond to the `package_carrier_type` ('none' to default), we make a conversion.
+        # No need conversion for other carriers as the `delivery_type` and
+        #`package_carrier_type` will be the same in these cases.
+        if context['current_package_carrier_type'] in ['fixed', 'base_on_rule']:
+            context['current_package_carrier_type'] = 'none'
         return {
             'name': _('Package Details'),
             'type': 'ir.actions.act_window',
@@ -40,161 +233,124 @@ class StockPackOperation(models.Model):
             'view_id': view_id,
             'views': [(view_id, 'form')],
             'target': 'new',
-            'context': {
-                'default_stock_quant_package_id': self.result_package_id.id,
-                'current_package_carrier_type': self.picking_id.carrier_id.delivery_type if self.picking_id.carrier_id.delivery_type not in ['base_on_rule', 'fixed'] else 'none',
-                }
+            'context': context,
         }
 
-
-class StockPicking(models.Model):
-    _inherit = 'stock.picking'
-
-    def _default_uom(self):
-        weight_uom_id = self.env.ref('product.product_uom_kgm', raise_if_not_found=False)
-        if not weight_uom_id:
-            uom_categ_id = self.env.ref('product.product_uom_categ_kgm').id
-            weight_uom_id = self.env['product.uom'].search([('category_id', '=', uom_categ_id), ('factor', '=', 1)], limit=1)
-        return weight_uom_id
-
-    @api.one
-    @api.depends('pack_operation_ids')
-    def _compute_packages(self):
-        self.ensure_one()
-        packs = set()
-        for packop in self.pack_operation_ids:
-            if packop.result_package_id and packop.result_package_id.packaging_id:
-                packs.add(packop.result_package_id.id)
-        self.package_ids = list(packs)
-
-    @api.one
-    @api.depends('pack_operation_ids')
-    def _compute_bulk_weight(self):
-        weight = 0.0
-        for packop in self.pack_operation_ids:
-            if packop.product_id and not packop.result_package_id:
-                weight += packop.product_uom_id._compute_quantity(packop.product_qty, packop.product_id.uom_id) * packop.product_id.weight
-        self.weight_bulk = weight
-
-    @api.one
-    @api.depends('package_ids', 'weight_bulk')
-    def _compute_shipping_weight(self):
-        self.shipping_weight = self.weight_bulk + sum([pack.shipping_weight for pack in self.package_ids])
-
-    carrier_price = fields.Float(string="Shipping Cost")
-    delivery_type = fields.Selection(related='carrier_id.delivery_type', readonly=True)
-    carrier_id = fields.Many2one("delivery.carrier", string="Carrier")
-    volume = fields.Float(copy=False)
-    weight = fields.Float(compute='_cal_weight', digits=dp.get_precision('Stock Weight'), store=True)
-    carrier_tracking_ref = fields.Char(string='Tracking Reference', copy=False)
-    number_of_packages = fields.Integer(string='Number of Packages', copy=False)
-    weight_uom_id = fields.Many2one('product.uom', string='Unit of Measure', required=True, readonly="1", help="Unit of measurement for Weight", default=_default_uom)
-    package_ids = fields.Many2many('stock.quant.package', compute='_compute_packages', string='Packages')
-    weight_bulk = fields.Float('Bulk Weight', compute='_compute_bulk_weight')
-    shipping_weight = fields.Float("Weight for Shipping", compute='_compute_shipping_weight')
-
-    @api.onchange('carrier_id')
-    def onchange_carrier(self):
-        if self.carrier_id.delivery_type in ['fixed', 'base_on_rule']:
-            order = self.sale_id
-            if order:
-                self.carrier_price = self.carrier_id.get_price_available(order)
-            else:
-                self.carrier_price = self.carrier_id.price
-
-    @api.depends('product_id', 'move_lines')
-    def _cal_weight(self):
-        for picking in self:
-            picking.weight = sum(move.weight for move in picking.move_lines if move.state != 'cancel')
-
-    @api.multi
-    def do_transfer(self):
-        # TDE FIXME: should work in batch
-        self.ensure_one()
-        res = super(StockPicking, self).do_transfer()
-
-        if self.carrier_id and self.carrier_id.delivery_type not in ['fixed', 'base_on_rule'] and self.carrier_id.integration_level == 'rate_and_ship' and self.package_ids:
-            self.send_to_shipper()
-
-        if self.carrier_id:
-            self._add_delivery_cost_to_so()
-
-        return res
-
-    @api.multi
-    def put_in_pack(self):
-        if self.carrier_id and self.carrier_id.delivery_type not in ['base_on_rule', 'fixed']:
-            view_id = self.env.ref('delivery.choose_delivery_package_view_form').id
-            return {
-                'name': _('Package Details'),
-                'type': 'ir.actions.act_window',
-                'view_mode': 'form',
-                'res_model': 'choose.delivery.package',
-                'view_id': view_id,
-                'views': [(view_id, 'form')],
-                'target': 'new',
-                'context': {
-                    'current_package_carrier_type': self.carrier_id.delivery_type,
-                }
-            }
-        else:
-            return self._put_in_pack()
-
-    @api.multi
     def send_to_shipper(self):
         self.ensure_one()
         res = self.carrier_id.send_shipping(self)[0]
-        self.carrier_price = res['exact_price']
-        self.carrier_tracking_ref = res['tracking_number']
+        if self.carrier_id.free_over and self.sale_id:
+            amount_without_delivery = self.sale_id._compute_amount_total_without_delivery()
+            if self.carrier_id._compute_currency(self.sale_id, amount_without_delivery, 'pricelist_to_company') >= self.carrier_id.amount:
+                res['exact_price'] = 0.0
+        self.carrier_price = res['exact_price'] * (1.0 + (self.carrier_id.margin / 100.0))
+        if res['tracking_number']:
+            related_pickings = self.env['stock.picking'] if self.carrier_tracking_ref and res['tracking_number'] in self.carrier_tracking_ref else self
+            accessed_moves = previous_moves = self.move_ids.move_orig_ids
+            while previous_moves:
+                related_pickings |= previous_moves.picking_id
+                previous_moves = previous_moves.move_orig_ids - accessed_moves
+                accessed_moves |= previous_moves
+            accessed_moves = next_moves = self.move_ids.move_dest_ids
+            while next_moves:
+                related_pickings |= next_moves.picking_id
+                next_moves = next_moves.move_dest_ids - accessed_moves
+                accessed_moves |= next_moves
+            without_tracking = related_pickings.filtered(lambda p: not p.carrier_tracking_ref)
+            without_tracking.carrier_tracking_ref = res['tracking_number']
+            for p in related_pickings - without_tracking:
+                p.carrier_tracking_ref += "," + res['tracking_number']
         order_currency = self.sale_id.currency_id or self.company_id.currency_id
-        msg = _("Shipment sent to carrier %s for shipping with tracking number %s<br/>Cost: %.2f %s") % (self.carrier_id.name, self.carrier_tracking_ref, self.carrier_price, order_currency.name)
+        msg = _(
+            "Shipment sent to carrier %(carrier_name)s for shipping with tracking number %(ref)s<br/>Cost: %(price).2f %(currency)s",
+            carrier_name=self.carrier_id.name,
+            ref=self.carrier_tracking_ref,
+            price=self.carrier_price,
+            currency=order_currency.name
+        )
         self.message_post(body=msg)
+        self._add_delivery_cost_to_so()
 
-    @api.multi
+    def _check_carrier_details_compliance(self):
+        """Hook to check if a delivery is compliant in regard of the carrier.
+        """
+        return
+
+    def print_return_label(self):
+        self.ensure_one()
+        self.carrier_id.get_return_label(self)
+
+    def _get_matching_delivery_lines(self):
+        return self.sale_id.order_line.filtered(
+            lambda l: l.is_delivery
+            and l.currency_id.is_zero(l.price_unit)
+            and l.product_id == self.carrier_id.product_id
+        )
+
+    def _prepare_sale_delivery_line_vals(self):
+        return {
+            'price_unit': self.carrier_price,
+            # remove the estimated price from the description
+            'name': self.carrier_id.with_context(lang=self.partner_id.lang).name,
+        }
+
     def _add_delivery_cost_to_so(self):
         self.ensure_one()
         sale_order = self.sale_id
-        if sale_order.invoice_shipping_on_delivery:
-            sale_order._create_delivery_line(self.carrier_id, self.carrier_price)
+        if sale_order and self.carrier_id.invoice_policy == 'real' and self.carrier_price:
+            delivery_lines = self._get_matching_delivery_lines()
+            if not delivery_lines:
+                delivery_lines = sale_order._create_delivery_line(self.carrier_id, self.carrier_price)
+            vals = self._prepare_sale_delivery_line_vals()
+            delivery_lines[0].write(vals)
 
-    @api.multi
     def open_website_url(self):
         self.ensure_one()
-        if self.carrier_id.get_tracking_link(self):
-            url = self.carrier_id.get_tracking_link(self)[0]
-        else:
+        if not self.carrier_tracking_url:
             raise UserError(_("Your delivery method has no redirect on courier provider's website to track this order."))
 
-        client_action = {'type': 'ir.actions.act_url',
-                         'name': "Shipment Tracking Page",
-                         'target': 'new',
-                         'url': url,
-                         }
+        carrier_trackers = []
+        try:
+            carrier_trackers = json.loads(self.carrier_tracking_url)
+        except ValueError:
+            carrier_trackers = self.carrier_tracking_url
+        else:
+            msg = "Tracking links for shipment: <br/>"
+            for tracker in carrier_trackers:
+                msg += '<a href=' + tracker[1] + '>' + tracker[0] + '</a><br/>'
+            self.message_post(body=msg)
+            return self.env["ir.actions.actions"]._for_xml_id("delivery.act_delivery_trackers_url")
+
+        client_action = {
+            'type': 'ir.actions.act_url',
+            'name': "Shipment Tracking Page",
+            'target': 'new',
+            'url': self.carrier_tracking_url,
+        }
         return client_action
 
-    @api.one
     def cancel_shipment(self):
-        self.carrier_id.cancel_shipment(self)
-        msg = "Shipment %s cancelled" % self.carrier_tracking_ref
-        self.message_post(body=msg)
-        self.carrier_tracking_ref = False
+        for picking in self:
+            picking.carrier_id.cancel_shipment(self)
+            msg = "Shipment %s cancelled" % picking.carrier_tracking_ref
+            picking.message_post(body=msg)
+            picking.carrier_tracking_ref = False
 
-    @api.multi
-    def check_packages_are_identical(self):
-        '''Some shippers require identical packages in the same shipment. This utility checks it.'''
+    def _get_estimated_weight(self):
         self.ensure_one()
-        if self.package_ids:
-            packages = [p.packaging_id for p in self.package_ids]
-            if len(set(packages)) != 1:
-                package_names = ', '.join([str(p.name) for p in packages])
-                raise UserError(_('You are shipping different packaging types in the same shipment.\nPackaging Types: %s' % package_names))
-        return True
+        weight = 0.0
+        for move in self.move_ids:
+            weight += move.product_qty * move.product_id.weight
+        return weight
+
+    def _should_generate_commercial_invoice(self):
+        self.ensure_one()
+        return self.picking_type_id.warehouse_id.partner_id.country_id != self.partner_id.country_id
 
 
 class StockReturnPicking(models.TransientModel):
     _inherit = 'stock.return.picking'
 
-    @api.multi
     def _create_returns(self):
         # Prevent copy of the carrier and carrier price when generating return picking
         # (we have no integration of returns for now)

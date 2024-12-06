@@ -1,85 +1,126 @@
-odoo.define('website_sale.payment', function (require) {
-"use strict";
+odoo.define('website_sale.payment', require => {
+    'use strict';
 
-var ajax = require('web.ajax');
+    const checkoutForm = require('payment.checkout_form');
+    const publicWidget = require('web.public.widget');
 
-$(document).ready(function () {
-    // If option is enable
-    if ($("#checkbox_cgv").length) {
-      $("#checkbox_cgv").change(function() {
-        $("div.oe_sale_acquirer_button").find('input, button').prop("disabled", !this.checked);
-      });
-      $('#checkbox_cgv').trigger('change');
-    }
+    const websiteSalePaymentMixin = {
 
-    // When choosing an acquirer, display its Pay Now button
-    var $payment = $("#payment_method");
-    $payment.on("click", "input[name='acquirer'], a.btn_payment_token", function (ev) {
-            var ico_off = 'fa-circle-o';
-            var ico_on = 'fa-dot-circle-o';
+        /**
+         * @override
+         */
+        init: function () {
+            this._onClickTCCheckbox = _.debounce(this._onClickTCCheckbox, 100, true);
+            this._super(...arguments);
+        },
 
-            var payment_id = $(ev.currentTarget).val() || $(this).data('acquirer');
-            var token = $(ev.currentTarget).data('token') || '';
+        /**
+         * @override
+         */
+        start: function () {
+            this.$checkbox = this.$('#checkbox_tc');
+            this.$submitButton = this.$('button[name="o_payment_submit_button"]');
+            this._adaptConfirmButton();
+            return this._super(...arguments);
+        },
 
-            $("div.oe_sale_acquirer_button[data-id='"+payment_id+"']", $payment).attr('data-token', token);
-            $("div.js_payment a.list-group-item").removeClass("list-group-item-info");
-            $('span.js_radio').switchClass(ico_on, ico_off, 0);
-            if (token) {
-              $("div.oe_sale_acquirer_button div.token_hide").hide();
-              $(ev.currentTarget).find('span.js_radio').switchClass(ico_off, ico_on, 0);
-              $(ev.currentTarget).parents('li').find('input').prop("checked", true);
-              $(ev.currentTarget).addClass("list-group-item-info");
+        //--------------------------------------------------------------------------
+        // Private
+        //--------------------------------------------------------------------------
+
+        /**
+         * Update the data on the submit button with the status of the Terms and Conditions input.
+         *
+         * @private
+         * @return {undefined}
+         */
+        _adaptConfirmButton: function () {
+            if (this.$checkbox.length > 0) {
+                const disabledReasons = this.$submitButton.data('disabled_reasons') || {};
+                disabledReasons.tc = !this.$checkbox.prop('checked');
+                this.$submitButton.data('disabled_reasons', disabledReasons);
             }
-            else{
-              $("div.oe_sale_acquirer_button div.token_hide").show();
+        },
+
+    };
+
+    checkoutForm.include(Object.assign({}, websiteSalePaymentMixin, {
+        events: Object.assign({}, checkoutForm.prototype.events, {
+            'change #checkbox_tc': '_onClickTCCheckbox',
+        }),
+
+        //----------------------------------------------------------------------
+        // Private
+        //----------------------------------------------------------------------
+
+        /**
+         * Verify that the Terms and Condition checkbox is checked.
+         *
+         * @override method from payment.payment_form_mixin
+         * @private
+         * @return {boolean} Whether the submit button can be enabled
+         */
+        _isButtonReady: function () {
+            const disabledReasonFound = _.contains(
+                this.$submitButton.data('disabled_reasons'), true
+            );
+            return !disabledReasonFound && this._super();
+        },
+
+        //--------------------------------------------------------------------------
+        // Handlers
+        //--------------------------------------------------------------------------
+
+        /**
+         * Enable the submit button if it all conditions are met.
+         *
+         * @private
+         * @return {undefined}
+         */
+        _onClickTCCheckbox: function () {
+            this._adaptConfirmButton();
+
+            if (!this._enableButton()) {
+                this._disableButton(false);
             }
-            $("div.oe_sale_acquirer_button[data-id]", $payment).addClass("hidden");
-            $("div.oe_sale_acquirer_button[data-id='"+payment_id+"']", $payment).removeClass("hidden");
+        },
 
-    })
-    .find("input[name='acquirer']:checked").click();
+    }));
 
-    // When clicking on payment button: create the tx using json then continue to the acquirer
-    $payment.on("click", 'button[type="submit"], button[name="submit"]', function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      var $form = $(ev.currentTarget).parents('form');
-      var acquirer = $(ev.currentTarget).parents('div.oe_sale_acquirer_button').first();
-      var acquirer_id = acquirer.data('id');
-      var acquirer_token = acquirer.attr('data-token'); // !=data
-      var params = {'tx_type': acquirer.find('input[name="odoo_save_token"]').is(':checked')?'form_save':'form'};
-      if (! acquirer_id) {
-        return false;
-      }
-      if (acquirer_token) {
-        params.token = acquirer_token;
-      }
-      $form.off('submit');
-      ajax.jsonRpc('/shop/payment/transaction/' + acquirer_id, 'call', params).then(function (data) {
-          $(data).appendTo('body').submit();
-      });
-      return false;
-    });
+    publicWidget.registry.WebsiteSalePayment = publicWidget.Widget.extend(
+        Object.assign({}, websiteSalePaymentMixin, {
+            selector: 'div[name="o_website_sale_free_cart"]',
+            events: {
+                'change #checkbox_tc': '_onClickTCCheckbox',
+            },
 
-    $('div.oe_pay_token').on('click', 'a.js_btn_valid_tx', function() {
-      $('div.js_token_load').toggle();
+            /**
+             * @override
+             */
+            start: function () {
+                this.$checkbox = this.$('#checkbox_tc');
+                this.$submitButton = this.$('button[name="o_payment_submit_button"]');
+                this._onClickTCCheckbox();
+                return this._super(...arguments);
+            },
 
-      var $form = $(this).parents('form');
-      ajax.jsonRpc($form.attr('action'), 'call', $.deparam($form.serialize())).then(function (data) {
-        if (data.url) {
-          window.location = data.url;
-        }
-        else {
-          $('div.js_token_load').toggle();
-          if (!data.success && data.error) {
-            $('div.oe_pay_token div.panel-body p').html(data.error + "<br/><br/>" + _('Retry ? '));
-            $('div.oe_pay_token div.panel-body').parents('div').removeClass('panel-info').addClass('panel-danger');
-          }
-        }
-      });
+            //--------------------------------------------------------------------------
+            // Handlers
+            //--------------------------------------------------------------------------
 
-    });
+            /**
+             * Enable the submit button if it all conditions are met.
+             *
+             * @private
+             * @return {undefined}
+             */
+            _onClickTCCheckbox: function () {
+                this._adaptConfirmButton();
 
-});
-
+                const disabledReasonFound = _.contains(
+                    this.$submitButton.data('disabled_reasons'), true
+                );
+                this.$submitButton.prop('disabled', disabledReasonFound);
+            },
+        }));
 });
