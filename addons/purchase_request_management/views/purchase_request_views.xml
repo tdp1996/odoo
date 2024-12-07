@@ -71,6 +71,7 @@
                                     </control>
                                     <field name="product_id"/>
                                     <field name="uom_id"/>
+                                    <field name="price_unit"/>
                                     <field name="qty"/>
                                     <field name="total"/>
                                 </tree>

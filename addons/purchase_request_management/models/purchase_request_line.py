@@ -18,6 +18,12 @@ class PurchaseRequestLine(models.Model):
         string="Unit Of Measure",
         required=True)
     
+    price_unit = fields.Float(
+        compute="_compute_unit_price",
+        string="Unit Price",
+        required=True
+    )
+    
     qty = fields.Float(
         string="Quantity",
         required=True)
@@ -33,6 +39,7 @@ class PurchaseRequestLine(models.Model):
     def _compute_total(self):
         for record in self:
             record.total = record.qty * record.product_id.list_price
+
     
 
     

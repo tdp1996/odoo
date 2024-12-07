@@ -74,7 +74,9 @@ class PurchaseRequest(models.Model):
         if vals.get('name', 'New') == 'New':
             vals['name'] = self.env['ir.sequence'].next_by_code('purchase.request')
             return super(PurchaseRequest, self).create(vals)
-          
+        
+    
+    
         
     # ACTIONS
     def action_pr_save(self):
