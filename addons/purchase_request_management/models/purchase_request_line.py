@@ -19,7 +19,6 @@ class PurchaseRequestLine(models.Model):
         required=True)
     
     price_unit = fields.Float(
-        compute="_compute_unit_price",
         string="Unit Price",
         required=True
     )
