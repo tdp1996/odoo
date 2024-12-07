@@ -6,21 +6,17 @@ class PurchaseRequestLine(models.Model):
 
     request_id = fields.Many2one(
         comodel_name='purchase.request',
-        string="Requester",
-        required=True,
-        readonly=True)
+        string="Order Reference")
     
     product_id = fields.Many2one(
         comodel_name='product.template',
         string="Product",
-        required=True,
-        readonly=True)
+        required=True)
     
     uom_id = fields.Many2one(
         comodel_name='uom.uom',
         string="Unit Of Measure",
-        required=True,
-        readonly=True)
+        required=True)
     
     qty = fields.Float(
         string="Quantity",

@@ -12,20 +12,19 @@ class PurchaseRequest(models.Model):
     department_id = fields.Many2one(
         comodel_name='hr.department',
         string="Department",
-        required=True,
-        readonly=True)
+        default=lambda self: self.env.user.department_id.id,
+        required=True)
     
     request_id = fields.Many2one(
-        comodel_name='res.users',
-        string="Requester",
-        required=True,
-        readonly=True)
-
+        comodel_name='res.users', 
+        string="Requested By", 
+        default=lambda self: self.env.user,
+        required=True)
+    
     approver_id = fields.Many2one(
         comodel_name='res.users',
         string="Approver",
-        required=True,
-        readonly=True)
+        required=True)
 
     date_request = fields.Date(
         string="Request Date",
@@ -50,8 +49,7 @@ class PurchaseRequest(models.Model):
     request_line_ids = fields.One2many(
         comodel_name='purchase.request.line',
         inverse_name='request_id',
-        string='Request line',
-        required=True)
+        string='Request Line')
 
     total_qty = fields.Float(
         compute='_compute_total_quantity',
@@ -76,6 +74,18 @@ class PurchaseRequest(models.Model):
         if vals.get('name', 'New') == 'New':
             vals['name'] = self.env['ir.sequence'].next_by_code('purchase.request')
             return super(PurchaseRequest, self).create(vals)
+          
+        
+    # ACTIONS
+    def action_pr_save(self):
+        pass
+
+    def action_pr_cancel(self):
+        pass
+
+    def action_request_approval(self):
+        pass
+    
 
 
 

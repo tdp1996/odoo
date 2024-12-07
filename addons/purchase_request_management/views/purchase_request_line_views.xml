@@ -4,8 +4,7 @@
         <field name="name">purchase.request.line.tree</field>
         <field name="model">purchase.request.line</field>
         <field name="arch" type="xml">
-            <tree string="Purchase Request Lines">
-                <field name="request_id"/>
+            <tree string="Purchase Request Lines" create="false">
                 <field name="product_id"/>
                 <field name="uom_id"/>
                 <field name="qty"/>
