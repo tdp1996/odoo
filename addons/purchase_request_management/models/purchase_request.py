@@ -12,27 +12,33 @@ class PurchaseRequest(models.Model):
     department_id = fields.Many2one(
         comodel_name='hr.department',
         string="Department",
-        default=lambda self: self.env.user.department_id.id,
+        default=lambda self: self.env.user.department_id,
+        readonly=True,
         required=True)
     
     request_id = fields.Many2one(
         comodel_name='res.users', 
         string="Requested By", 
         default=lambda self: self.env.user,
+        readonly=True,
         required=True)
     
     approver_id = fields.Many2one(
         comodel_name='res.users',
         string="Approver",
+        default=lambda self: self.env.user.employee_ids.parent_id,
+        readonly=True,
         required=True)
 
     date_request = fields.Date(
         string="Request Date",
         default=fields.Date.context_today,
+        readonly=True,
         required=True)
     
     date_approve = fields.Date(
-        string="Approve Date")
+        string="Approve Date",
+        readonly=True)
     
     description = fields.Text(string="Description")
 
@@ -74,19 +80,21 @@ class PurchaseRequest(models.Model):
         if vals.get('name', 'New') == 'New':
             vals['name'] = self.env['ir.sequence'].next_by_code('purchase.request')
             return super(PurchaseRequest, self).create(vals)
-        
-    
     
         
     # ACTIONS
-    def action_pr_save(self):
-        pass
+    def action_pr_back(self):
+        self.state = 'draft'
 
-    def action_pr_cancel(self):
+    def action_pr_refuse(self):
         pass
 
     def action_request_approval(self):
-        pass
+        self.state = 'wait'
+
+    def action_pr_approve(self):
+        self.date_approve = fields.Date.context_today(self)
+        self.state = 'approved'
     
 
 

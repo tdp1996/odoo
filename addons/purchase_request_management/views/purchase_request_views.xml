@@ -32,9 +32,10 @@
         <field name="arch" type="xml">
             <form string="Purchase Requests">
             <header>
-                    <button name="action_pr_save" state="draft" string="Save" type="object"/>
-                    <button name="action_pr_cancel" state="draft" string="Cancel" type="object"/>
-                    <button name="action_request_approval" state="draft" string="Request Approval" type="object"/>
+                    <button name="action_pr_back" string="Back" type="object" attrs="{'invisible': [('state', '!=', 'wait')]}" groups="base.group_user"/>
+                    <button name="action_pr_refuse" string="Refuse" type="object" attrs="{'invisible': [('state', '!=', 'wait')]}" groups="purchase_request_management.group_purchase_request_manager"/>
+                    <button name="action_request_approval" string="Request Approval" type="object" attrs="{'invisible': [('state', '!=', 'draft')]}" groups="base.group_user"/>
+                    <button name="action_pr_approve" string="Approve" type="object" attrs="{'invisible': [('state', '!=', 'wait')]}" groups="purchase_request_management.group_purchase_request_manager"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,wait,approved,cancel" readonly="1"/>
             </header>
             <sheet>             
@@ -59,7 +60,7 @@
                                 widget="section_and_note_one2many"
                                 mode="tree,kanban"
                                 context="{'default_state': 'draft'}"
-                                attrs="{'readonly': [('state', 'in', ('approve', 'cancel'))]}">
+                                attrs="{'readonly': [('state', 'in', ('wait', 'approved', 'cancel'))]}">
                                 <tree editable="bottom">
                                     <control>
                                         <create name="add_product_control" string="Add a product"/>
@@ -68,6 +69,7 @@
                                     <field name="uom_id"/>
                                     <field name="price_unit"/>
                                     <field name="qty"/>
+                                    <field name="qty_approve" groups="purchase_request_management.group_purchase_request_manager"/>
                                     <field name="total"/>
                                 </tree>
                             </field>

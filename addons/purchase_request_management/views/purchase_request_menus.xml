@@ -5,6 +5,7 @@
         id="menu_purchase_request_root"
         name="Purchase Request"
         action="action_purchase_request"
+        groups = "base.group_user"
         sequence="1"/>
 
         <menuitem
@@ -12,6 +13,7 @@
             name="Purchase Request Line"
             action="action_purchase_request_line"
             parent="menu_purchase_request_root"
+            groups = "base.group_user"
             sequence="10"/> 
 
 </odoo>

@@ -1,15 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-    <record id="purchase_request_delete_draft" model="ir.rule">
+    <record id="purchase_request_user_rule" model="ir.rule">
+        <field name="name">User: View Own Records</field>
+        <field name="model_id" ref="model_purchase_request"/>
+        <field name="domain_force">[('create_uid', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('purchase_request_management.group_purchase_request_user'))]"/>
+    </record>
+    <record id="purchase_request_manager_rule" model="ir.rule">
+        <field name="name">Manager: View Own and Employee Records</field>
+        <field name="model_id" ref="model_purchase_request"/>
+        <field name="domain_force">['|', ('create_uid', '=', user.id), ('create_uid.employee_parent_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('purchase_request_management.group_purchase_request_manager'))]"/>
+    </record>
+    <!-- <record id="purchase_request_delete_draft" model="ir.rule">
         <field name="name">Delete Only Draft Purchase Request</field>
         <field name="model_id" ref="model_purchase_request"/>
-        <field name="domain_force">[('state', '=', 'draft')]</field>
-        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
-        <field name="perm_read" eval="True"/>
-        <field name="perm_write" eval="True"/>
-        <field name="perm_create" eval="True"/>
-        <field name="perm_unlink" eval="True"/>
-    </record>
+        <field name="domain_force">[('state', '!=', 'draft')]</field>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record> -->
 
 </odoo>
