@@ -13,13 +13,5 @@
         <field name="domain_force">['|', ('create_uid', '=', user.id), ('create_uid.employee_parent_id', '=', user.id)]</field>
         <field name="groups" eval="[(4, ref('purchase_request_management.group_purchase_request_manager'))]"/>
     </record>
-    <!-- <record id="purchase_request_delete_draft" model="ir.rule">
-        <field name="name">Delete Only Draft Purchase Request</field>
-        <field name="model_id" ref="model_purchase_request"/>
-        <field name="domain_force">[('state', '!=', 'draft')]</field>
-        <field name="perm_write" eval="False"/>
-        <field name="perm_create" eval="False"/>
-        <field name="perm_unlink" eval="False"/>
-    </record> -->
 
 </odoo>
