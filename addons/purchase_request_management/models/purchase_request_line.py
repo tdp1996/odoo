@@ -8,6 +8,11 @@ class PurchaseRequestLine(models.Model):
         comodel_name='purchase.request',
         string="Order Reference")
     
+    state = fields.Selection(
+        related='request_id.state',
+        string="State",
+        readonly=True)
+    
     product_id = fields.Many2one(
         comodel_name='product.template',
         string="Product",
