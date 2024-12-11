@@ -66,7 +66,7 @@
                                 widget="section_and_note_one2many" 
                                 mode="tree,kanban" context="{'default_state': 'draft'}" 
                                 attrs="{'readonly': [('state', 'in', ('approved', 'cancel'))]}">
-                                <tree editable="bottom" delete="false" attrs="{'delete': [('state', '=', 'wait')]}">
+                                <tree editable="bottom">
                                     <control>
                                         <create name="add_product_control" string="Add a product"/>
                                     </control>

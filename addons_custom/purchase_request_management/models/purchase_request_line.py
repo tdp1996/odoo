@@ -1,4 +1,5 @@
 from odoo import models, fields, api
+from odoo.exceptions import UserError
 
 class PurchaseRequestLine(models.Model):
     _name = 'purchase.request.line'
@@ -37,7 +38,22 @@ class PurchaseRequestLine(models.Model):
     
     total = fields.Float(
         compute='_compute_total',
-        string='Total')
+        string='Total',
+        readonly=True)
+    
+    @api.model
+    def unlink(self):
+        for line in self:
+            if line.request_id.state != 'draft':
+                raise UserError("You are not allowed to delete purchase request details in a state other than 'draft'.")    
+        return super(PurchaseRequestLine, self).unlink()
+    
+    @api.model
+    def create(self, vals):
+        purchase_request = self.env['purchase.request'].browse(vals.get('request_id'))
+        if purchase_request.state != 'draft':
+            raise UserError("You are only allowed to create purchase request details in a state other than 'draft'.")
+        return super(PurchaseRequestLine, self).create(vals)
     
     @api.depends('qty','product_id.list_price', 'price_unit')
     def _compute_total(self):
