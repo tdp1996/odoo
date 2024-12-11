@@ -39,11 +39,32 @@ class PurchaseRequestLine(models.Model):
         compute='_compute_total',
         string='Total')
     
-    @api.depends('qty','product_id.list_price')
+    @api.depends('qty','product_id.list_price', 'price_unit')
     def _compute_total(self):
         for record in self:
-            record.total = record.qty * record.product_id.list_price
-
+            record.total = 0.00
+            if not record.price_unit:
+                record.total = record.qty * record.product_id.list_price
+            else:
+                record.total = record.qty * record.price_unit
+                
+    @api.onchange('product_id')
+    def _onchange_product_id(self):
+        for record in self:
+            if record.product_id:
+                purchase_line = self.env['purchase.request.line'].search([
+                    ('product_id', '=', record.product_id.id)
+                ], order='create_date desc', limit=1)
+                # record.price_unit = purchase_line.price_unit 
+                record.uom_id = purchase_line.uom_id
+    
+    @api.onchange('qty_approve', 'price_unit')
+    def _onchange_qty_approve_and_price(self):
+        for record in self:
+            if record.qty_approve and record.price_unit:
+                record.total = record.qty_approve * record.price_unit
+            else:
+                record.total = record.qty_approve * record.product_id.list_price
     
 
-    
+
