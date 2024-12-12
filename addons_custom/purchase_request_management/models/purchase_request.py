@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from odoo import models, fields, api
-from odoo.exceptions import ValidationError
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError, UserError
 
 
 class PurchaseRequest(models.Model):
@@ -86,6 +86,12 @@ class PurchaseRequest(models.Model):
         if vals.get("name", "New") == "New":
             vals["name"] = self.env["ir.sequence"].next_by_code("purchase.request")
             return super(PurchaseRequest, self).create(vals)
+    
+    @api.ondelete(at_uninstall=False)
+    def _unlink_request_if_not_draft(self):
+        for request in self:
+            if request.state != 'draft':
+                raise UserError(_('You cannot delete a request that is not in draft state..'))
 
     # ACTIONS
     def action_pr_back(self):

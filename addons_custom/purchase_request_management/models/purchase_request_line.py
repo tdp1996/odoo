@@ -1,5 +1,5 @@
-from odoo import models, fields, api
-from odoo.exceptions import UserError, ValidationError
+from odoo import models, fields, api, _
+from odoo.exceptions import UserError
 
 class PurchaseRequestLine(models.Model):
     _name = 'purchase.request.line'
@@ -7,7 +7,8 @@ class PurchaseRequestLine(models.Model):
 
     request_id = fields.Many2one(
         comodel_name='purchase.request',
-        string="Order Reference")
+        string="Order Reference",
+        ondelete='cascade')
     
     state = fields.Selection(
         related='request_id.state',
@@ -22,8 +23,7 @@ class PurchaseRequestLine(models.Model):
     uom_id = fields.Many2one(
         comodel_name='uom.uom',
         string="Unit Of Measure",
-        required=True,
-        default="Units")
+        required=True)
     
     price_unit = fields.Float(
         string="Unit Price",
@@ -42,12 +42,12 @@ class PurchaseRequestLine(models.Model):
         string='Total',
         readonly=True)
     
-    @api.model
-    def unlink(self):
-        for line in self:
-            if line.request_id.state != 'draft':
-                raise UserError("You are not allowed to delete purchase request details in a state other than 'draft'.")    
-        return super(PurchaseRequestLine, self).unlink()
+    
+    @api.ondelete(at_uninstall=False)
+    def _unlink_request_line_if_not_draft(self):
+        for request in self:
+            if request.state != 'draft':
+                raise UserError(_('You cannot delete a request line that is not in draft state..'))
     
     @api.model
     def create(self, vals):

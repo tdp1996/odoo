@@ -5,6 +5,7 @@
         <field name="model">purchase.request.line</field>
         <field name="arch" type="xml">
             <tree string="Purchase Request Lines" create="false">
+                <field name="request_id"/>
                 <field name="product_id"/>
                 <field name="uom_id"/>
                 <field name="qty"/>
