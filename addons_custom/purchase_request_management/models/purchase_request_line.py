@@ -1,5 +1,5 @@
 from odoo import models, fields, api
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 
 class PurchaseRequestLine(models.Model):
     _name = 'purchase.request.line'
@@ -22,7 +22,8 @@ class PurchaseRequestLine(models.Model):
     uom_id = fields.Many2one(
         comodel_name='uom.uom',
         string="Unit Of Measure",
-        required=True)
+        required=True,
+        default="Units")
     
     price_unit = fields.Float(
         string="Unit Price",
@@ -58,29 +59,27 @@ class PurchaseRequestLine(models.Model):
     @api.depends('qty','product_id.list_price', 'price_unit')
     def _compute_total(self):
         for record in self:
-            record.total = 0.00
-            if not record.price_unit:
-                record.total = record.qty * record.product_id.list_price
+            if record.product_id: 
+                unit_price = record.price_unit or record.product_id.list_price
+                record.total = record.qty * unit_price
             else:
-                record.total = record.qty * record.price_unit
+                record.total = 0.00 
                 
     @api.onchange('product_id')
     def _onchange_product_id(self):
         for record in self:
             if record.product_id:
-                purchase_line = self.env['purchase.request.line'].search([
+                purchase_line = self.env['purchase.order.line'].search([
                     ('product_id', '=', record.product_id.id)
                 ], order='create_date desc', limit=1)
-                # record.price_unit = purchase_line.price_unit 
-                record.uom_id = purchase_line.uom_id
+                record.price_unit = purchase_line.price_unit 
+                record.uom_id = purchase_line.product_uom or "Units"
     
     @api.onchange('qty_approve', 'price_unit')
     def _onchange_qty_approve_and_price(self):
         for record in self:
-            if record.qty_approve and record.price_unit:
-                record.total = record.qty_approve * record.price_unit
-            else:
-                record.total = record.qty_approve * record.product_id.list_price
+            price = record.price_unit or record.product_id.list_price
+            record.total = (record.qty_approve or 0.0) * price
     
 
 
