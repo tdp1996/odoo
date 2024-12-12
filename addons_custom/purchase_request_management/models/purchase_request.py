@@ -86,8 +86,15 @@ class PurchaseRequest(models.Model):
     def action_pr_back(self):
         self.state = 'draft'
 
-    def action_pr_refuse(self):
-        pass
+    def action_pr_reject(self):
+        return {
+            'name': 'Enter the reason for rejection',
+            'type': 'ir.actions.act_window',
+            'view_type': 'form',
+            'view_mode': 'form',
+            'res_model': 'purchase.request.reject.wizard',
+            'target': 'new',
+        }
 
     def action_request_approval(self):
         self.state = 'wait'

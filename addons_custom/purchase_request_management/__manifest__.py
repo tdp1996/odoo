@@ -38,7 +38,8 @@
         'views/purchase_request_line_views.xml',
         'views/purchase_request_views.xml',
         'views/purchase_request_menus.xml',
-        # 'views/templates.xml',
+        
+        'wizard/purchase_request_reject.xml'
     ],
     # only loaded in demonstration mode
     'demo': [
