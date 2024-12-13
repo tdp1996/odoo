@@ -12,6 +12,13 @@ class PurchaseRequest(models.Model):
         "Purchase Reference", readonly=True, required=True, copy=False, default="New"
     )
 
+    purchase_order_ids = fields.One2many(
+        'purchase.order', 
+        'purchase_request_id', 
+        string="Purchase Orders", 
+        readonly=True
+    )
+
     department_id = fields.Many2one(
         comodel_name="hr.department",
         string="Department",
@@ -126,4 +133,22 @@ class PurchaseRequest(models.Model):
             self.state = "approved"
 
     def action_pr_order(self):
-        pass
+        self.ensure_one()
+        purchase_order_data = {
+        'purchase_request_id': self.id,
+        'order_line': [(0, 0, {
+            'product_id': line.product_id.id,
+            'name': line.product_id.name,
+            'product_uom': line.product_id.uom_po_id.id,
+            'product_qty': line.qty_approve,
+        }) for line in self.request_line_ids]
+    }
+
+        return {
+        'type': 'ir.actions.act_window',
+        'name': 'Purchase Order',
+        'res_model': 'purchase.order',
+        'view_mode': 'form',
+        'context': {'default_' + k: v for k, v in purchase_order_data.items()},
+        'target': 'current',
+        }
