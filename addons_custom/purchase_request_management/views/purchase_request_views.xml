@@ -77,7 +77,7 @@
                                     <field name="price_unit" attrs="{'readonly': [('state', 'in', ('wait',' approved', 'cancel'))]}"/>
                                     <field name="qty" attrs="{'readonly': [('state', 'in', ('wait',' approved', 'cancel'))]}"/>
                                     <field name="qty_approve" groups="purchase_request_management.group_purchase_request_manager" attrs="{'readonly': [('state', '!=', 'wait')]}"/>
-                                    <field name="total" attrs="{'readonly': [('state', 'in', ('wait',' approved', 'cancel'))]}"/>
+                                    <field name="total"/>
                                 </tree>
                             </field>
                         </page>

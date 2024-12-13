@@ -56,14 +56,13 @@ class PurchaseRequestLine(models.Model):
             raise UserError("You are only allowed to create purchase request details in a state other than 'draft'.")
         return super(PurchaseRequestLine, self).create(vals)
     
-    @api.depends('qty','product_id.list_price', 'price_unit')
+    @api.depends('qty','product_id.list_price', 'price_unit', 'qty_approve')
     def _compute_total(self):
         for record in self:
             if record.product_id: 
-                unit_price = record.price_unit or record.product_id.list_price
-                record.total = record.qty * unit_price
-            else:
-                record.total = 0.00 
+                unit_price = record.price_unit or record.product_id.list_price            
+                quantity = record.qty_approve if record.qty_approve != 0.00 else record.qty
+                record.total = quantity * unit_price
                 
     @api.onchange('product_id')
     def _onchange_product_id(self):
@@ -74,6 +73,7 @@ class PurchaseRequestLine(models.Model):
                 ], order='create_date desc', limit=1)
                 record.price_unit = purchase_line.price_unit 
                 record.uom_id = purchase_line.product_uom or "Units"
+                
     
     @api.onchange('qty_approve', 'price_unit')
     def _onchange_qty_approve_and_price(self):
