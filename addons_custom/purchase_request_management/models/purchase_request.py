@@ -9,50 +9,51 @@ class PurchaseRequest(models.Model):
     _description = "Purchase Request"
 
     name = fields.Char(
-        "Purchase Reference", readonly=True, required=True, copy=False, default="New"
-    )
+        "Purchase Reference", 
+        readonly=True, 
+        required=True, 
+        copy=False, 
+        default="New")
 
     purchase_order_ids = fields.One2many(
         'purchase.order', 
         'purchase_request_id', 
         string="Purchase Orders", 
-        readonly=True
-    )
+        readonly=True)
 
     department_id = fields.Many2one(
         comodel_name="hr.department",
         string="Department",
         default=lambda self: self.env.user.department_id,
         readonly=True,
-        required=True,
-    )
+        required=True)
 
     request_id = fields.Many2one(
         comodel_name="res.users",
         string="Requested By",
         default=lambda self: self.env.user,
         readonly=True,
-        required=True,
-    )
+        required=True)
 
     approver_id = fields.Many2one(
         comodel_name="res.users",
         string="Approver",
         default=lambda self: self.env.user.employee_ids.parent_id,
         readonly=True,
-        required=True,
-    )
+        required=True)
 
     date_request = fields.Date(
         string="Request Date",
         default=fields.Date.context_today,
         readonly=True,
-        required=True,
-    )
+        required=True)
 
-    date_approve = fields.Date(string="Approve Date", readonly=True)
+    date_approve = fields.Date(
+        string="Approve Date", 
+        readonly=True)
 
-    description = fields.Text(string="Description")
+    description = fields.Text(
+        string="Description")
 
     state = fields.Selection(
         selection=[
@@ -71,9 +72,13 @@ class PurchaseRequest(models.Model):
         string="Request Line",
     )
 
-    total_qty = fields.Float(compute="_compute_total_quantity", string="Total Quantity")
+    total_qty = fields.Float(
+        compute="_compute_total_quantity", 
+        string="Total Quantity")
 
-    total_amount = fields.Float(compute="_compute_total_amount", string="Total Amount")
+    total_amount = fields.Float(
+        compute="_compute_total_amount", 
+        string="Total Amount")
 
     @api.depends("request_line_ids.qty", "request_line_ids.qty_approve")
     def _compute_total_quantity(self):
@@ -94,11 +99,6 @@ class PurchaseRequest(models.Model):
             vals["name"] = self.env["ir.sequence"].next_by_code("purchase.request")
             return super(PurchaseRequest, self).create(vals)
     
-    @api.ondelete(at_uninstall=False)
-    def _unlink_request_if_not_draft(self):
-        for request in self:
-            if request.state != 'draft':
-                raise UserError(_('You cannot delete a request that is not in draft state..'))
 
     # ACTIONS
     def action_pr_back(self):
@@ -116,9 +116,8 @@ class PurchaseRequest(models.Model):
 
     def action_request_approval(self):
         if any(line.qty == 0.00 for line in self.request_line_ids):
-            raise ValidationError("Quantity cannot be left blank.")
-        else:
-            self.state = "wait"
+            raise ValidationError("The quantity for all request lines must be greater than zero.")
+        self.state = "wait"
 
     def action_pr_approve(self):
         if any(
@@ -126,29 +125,35 @@ class PurchaseRequest(models.Model):
             for line in self.request_line_ids
         ):
             raise ValidationError(
-                "Approved Quantity cannot be left blank or  greater than the requested quantity"
+                "The approved quantity must be greater than zero and cannot exceed the requested quantity."
             )
-        else:
-            self.date_approve = fields.Date.context_today(self)
-            self.state = "approved"
+        self.date_approve = fields.Date.context_today(self)
+        self.state = "approved"
 
     def action_pr_order(self):
         self.ensure_one()
+        
         purchase_order_data = {
-        'purchase_request_id': self.id,
-        'order_line': [(0, 0, {
-            'product_id': line.product_id.id,
-            'name': line.product_id.name,
-            'product_uom': line.product_id.uom_po_id.id,
-            'product_qty': line.qty_approve,
-        }) for line in self.request_line_ids]
-    }
-
-        return {
-        'type': 'ir.actions.act_window',
-        'name': 'Purchase Order',
-        'res_model': 'purchase.order',
-        'view_mode': 'form',
-        'context': {'default_' + k: v for k, v in purchase_order_data.items()},
-        'target': 'current',
+            'purchase_request_id': self.id,
+            'order_line': [
+                (0, 0, {
+                    'product_id': line.product_id.id,
+                    'name': line.product_id.name,
+                    'product_uom': line.product_id.uom_po_id.id,
+                    'product_qty': line.qty_approve,
+                })
+                for line in self.request_line_ids
+            ],
         }
+        
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Purchase Order',
+            'res_model': 'purchase.order',
+            'view_mode': 'form',
+            'context': {
+                'default_' + k: v for k, v in purchase_order_data.items()
+            },
+            'target': 'current',
+        }
+

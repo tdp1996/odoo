@@ -4,7 +4,7 @@
         <field name="name">purchase.request.line.tree</field>
         <field name="model">purchase.request.line</field>
         <field name="arch" type="xml">
-            <tree string="Purchase Request Lines" create="false">
+            <tree string="Purchase Request Lines" create="false" edit="false" delete="false">
                 <field name="request_id"/>
                 <field name="product_id"/>
                 <field name="uom_id"/>
@@ -16,6 +16,6 @@
     </record>
     <record id="action_purchase_request_line" model="ir.actions.act_window">
         <field name="res_model">purchase.request.line</field>
-        <field name="view_mode">tree,form</field>
+        <field name="view_mode">tree</field>
     </record>
 </odoo>
