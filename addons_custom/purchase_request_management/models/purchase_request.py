@@ -132,7 +132,7 @@ class PurchaseRequest(models.Model):
 
     def action_pr_approve(self):
         if any(
-            line.qty_approve == 0.00 or line.qty_approve > line.qty
+            line.qty_approve <= 0.00 or line.qty_approve > line.qty
             for line in self.request_line_ids
         ):
             raise ValidationError(
