@@ -1,7 +1,5 @@
 from odoo.tests.common import TransactionCase, tagged
 from odoo.exceptions import UserError
-from odoo import fields
-from datetime import datetime
 
 @tagged('-at_install', 'post_install')
 class TestPurchaseRequestLine(TransactionCase):
@@ -9,7 +7,6 @@ class TestPurchaseRequestLine(TransactionCase):
     def setUp(self):
         super(TestPurchaseRequestLine, self).setUp()
         
-        # Tạo dữ liệu cần thiết
         self.department = self.env['hr.department'].create({
             'name': 'IT',
         })
@@ -27,7 +24,6 @@ class TestPurchaseRequestLine(TransactionCase):
         })
         self.uom = self.env.ref('uom.product_uom_unit')
         
-        # Tạo purchase request
         self.purchase_request = self.env['purchase.request'].create({
             'department_id': self.department.id,
             'request_id': self.request_user.id,
