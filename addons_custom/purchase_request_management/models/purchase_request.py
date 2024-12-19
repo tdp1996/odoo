@@ -75,11 +75,11 @@ class PurchaseRequest(models.Model):
     )
 
     total_qty = fields.Float(
-        compute="_compute_total_quantity", 
+        compute="_compute_total", 
         string="Total Quantity")
 
     total_amount = fields.Float(
-        compute="_compute_total_amount", 
+        compute="_compute_total", 
         string="Total Amount")
 
     @api.model
@@ -95,19 +95,15 @@ class PurchaseRequest(models.Model):
                 raise UserError(_("You can only delete purchase requests in the 'Quotation' state."))
         return super(PurchaseRequest, self).unlink()
 
-    @api.depends("request_line_ids.qty", "request_line_ids.qty_approve")
-    def _compute_total_quantity(self):
+    @api.depends("request_line_ids.qty", "request_line_ids.qty_approve", "request_line_ids.total")
+    def _compute_total(self):
         for record in self:
             record.total_qty = sum(
                 line.qty if not line.qty_approve else line.qty_approve
                 for line in record.request_line_ids
             )
-
-    @api.depends("request_line_ids.total")
-    def _compute_total_amount(self):
-        for record in self:
             record.total_amount = sum(line.total for line in record.request_line_ids)
-    
+
 
     # ACTIONS
     def action_pr_back(self):
@@ -138,6 +134,7 @@ class PurchaseRequest(models.Model):
             raise UserError(
                 "The approved quantity must be greater than zero and cannot exceed the requested quantity."
             )
+        
         self.date_approve = fields.Date.context_today(self)
         self.state = "approved"
 

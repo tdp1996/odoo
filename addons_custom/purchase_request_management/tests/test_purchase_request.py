@@ -1,5 +1,5 @@
 from odoo.tests.common import TransactionCase, tagged
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import UserError
 
 @tagged('-at_install', 'post_install')
 class TestPurchaseRequestLine(TransactionCase):
@@ -53,7 +53,7 @@ class TestPurchaseRequestLine(TransactionCase):
         with self.assertRaises(UserError):
             self.purchase_request.unlink()
 
-    def test_compute_total_quantity(self):
+    def test_compute_total(self):
         self.purchase_request_line = self.env['purchase.request.line'].create({
             'product_id': self.product_b.id,
             'uom_id': self.uom.id,
@@ -61,28 +61,26 @@ class TestPurchaseRequestLine(TransactionCase):
             'qty': 3.0,
             'request_id': self.purchase_request.id,  
         })
-        self.purchase_request._compute_total_quantity()
+        self.purchase_request._compute_total()
         expected_total_qty = 5.0 + 3.0
-        self.assertEqual(self.purchase_request.total_qty, expected_total_qty)
+        expected_total_amount = (5.0 * 100.0) + (3.0 * 50.0)
 
-    def test_compute_total_amount(self):
-        self.purchase_request_line = self.env['purchase.request.line'].create({
-            'product_id': self.product_b.id,
-            'uom_id': self.uom.id,
-            'price_unit': 50.0,
-            'qty': 3.0,
-            'request_id': self.purchase_request.id,  
-        })
-        self.purchase_request._compute_total_amount()
-        expected_total_amount = 5.0*100.0 + 3.0*50.0
+        self.assertEqual(self.purchase_request.total_qty, expected_total_qty)
         self.assertEqual(self.purchase_request.total_amount, expected_total_amount)
+
 
     def test_purchase_request_state_transitions(self):
         self.purchase_request.action_request_approval()
         self.assertEqual(self.purchase_request.state, 'wait')
 
+        self.purchase_request.action_pr_back()
+        self.assertEqual(self.purchase_request.state, 'draft')
+
+        with self.assertRaises(UserError):
+            self.purchase_request.action_pr_approve()
+
+        self.purchase_request.request_line_ids.write({'qty_approve': 1.0})
         self.purchase_request.action_pr_approve()
         self.assertEqual(self.purchase_request.state, 'approved')
 
-        self.purchase_request.action_pr_back()
-        self.assertEqual(self.purchase_request.state, 'draft')
+        
